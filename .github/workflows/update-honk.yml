@@ -56,6 +56,41 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          sleep 5
-          gh workflow run "Build apk" --repo "$GITHUB_REPOSITORY" --ref main
+          set -euo pipefail
+          branch=main
+          want="$(git rev-parse HEAD)"
+          got=""
+
+          # 先等远端 ref 追上本地 HEAD：`gh workflow run --ref` 让 GitHub 取该分支「当时」的 HEAD，
+          # 若此刻 ref 还没更新，派发出的 run 会检出旧提交 ⇒ 守卫判「与最近 Release 无变化」而跳过；
+          # 而用默认 GITHUB_TOKEN 完成的 push 不触发其它 workflow ⇒ 这次 bump 就没有任何 run 去构建它，
+          # 只能等 schedule（最多晚约 3 小时），且表现是全绿（run 成功但什么也没做）。
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            got="$(git ls-remote origin "refs/heads/${branch}" | cut -f1)"
+            if [ "$got" = "$want" ]; then break; fi
+            echo "… 远端 ${branch}=${got:-空}，本地 HEAD=${want}，等待中（${i}/12）"
+            sleep 5
+          done
+          if [ "$got" != "$want" ]; then
+            echo "::error::远端 ${branch} 未更新到 ${want}，放弃派发"
+            exit 1
+          fi
+
+          gh workflow run "Build apk" --repo "$GITHUB_REPOSITORY" --ref "$branch"
+
+          # 再核对派发出去的 run 的 headSha：gh workflow run 是按「工作流名」定位的（改名即失效），
+          # 事件理论上也可能被丢弃，所以派发完必须确认真的有一个 run 落在本次提交上，
+          # 不要「发完就当成功」。
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            sleep 5
+            got="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "Build apk" \
+                     --branch "$branch" --limit 1 --json headSha --jq '.[0].headSha // ""')"
+            if [ "$got" = "$want" ]; then
+              echo "✓ 已派发 Build apk（headSha=${got}）"
+              exit 0
+            fi
+            echo "… 最新 run 的 headSha=${got:-空}，期望 ${want}（${i}/12）"
+          done
+          echo "::error::派发的 Build apk 未落到 ${want}，请手动在 Actions 里触发"
+          exit 1
 
