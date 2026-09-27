@@ -187,6 +187,28 @@ function originHost(s) {
 	return m ? m[1] : String(s || '').trim().replace(/\/+$/, '');
 }
 
+/* 当前是不是用 IP（或 localhost）在访问 LuCI。
+   IPv4 字面量 = 全是数字和点；IPv6 字面量在 location.hostname 里带方括号；localhost 同理按"直达"算。
+   ⚠️ 不用正则（jsmin 的教训）。 */
+function isLocalHostName(name) {
+	var s = String(name || '');
+
+	if (!s)
+		return false;
+
+	if (s === 'localhost' || s.charAt(0) === '[')
+		return true;
+
+	for (var i = 0; i < s.length; i++) {
+		var c = s.charAt(i);
+
+		if ((c < '0' || c > '9') && c !== '.')
+			return false;
+	}
+
+	return true;
+}
+
 /* 只有带 scheme 的条目才能直接当 URL 用。
    ⚠️ 这里刻意不用正则：luci.mk 用 Crockford 的 jsmin 压缩 htdocs 下的 JS，
    而 jsmin **不认识正则字面量** —— 写成 /^[a-z]+:\/\//i 时，"结尾的 / 紧跟在 \/ 之后"
@@ -199,12 +221,13 @@ function originUrl(s) {
 	return v.indexOf('://') > 0 ? v + '/ui/' : null;
 }
 
-/* 面板地址。优先级 = 「你此刻怎么访问 LuCI」：
+/* 面板地址。优先级 = 「你此刻怎么访问 LuCI」，并按 IP / 域名分叉：
    ① 当前 host 就在 allow_origins / allowed_hosts 里 → 用那一条（这条路你正在用）
-   ② listen 是通配 → 当前访问的主机名 + listen 的端口（IP 访问得 IP）
-   ③ listen 是具体地址 → 用它（loopback 会标注只能本机打开）
-   ④ 都没有 → 退回 allow_origins / allowed_hosts
-   另外：① 未命中而 allow_origins 有唯一项时，把它作为「对外」附注给出。 */
+   ② 用 IP / localhost 访问 → 按 listen 推导（通配就用当前主机名 = 那个 IP）
+   ③ 用域名访问 → 用 native_api 里配的对外地址（allow_origins → allowed_hosts）；
+      域名是前置反代，现编 `http://<该域名>:<端口>/ui/` 多半不通
+   ④ 配置里也没有对外地址 → 退回 listen 推导
+   另外：走 ② 而 allow_origins 有唯一项时，把它作为「对外」附注给出。 */
 function panelUrl(cfg) {
 	var l = splitListen(cfg.listen);
 	var origins = cfg.allow_origins || [];
@@ -221,21 +244,32 @@ function panelUrl(cfg) {
 			src: _('matches how you opened this page')
 		};
 
-	if (l && isWildcard(l.host))
+	/* ② 用 IP / localhost 访问 LuCI：同一张网里，监听地址 + 端口直接可用（"IP 访问就给 IP"）。
+	      listen 是通配时用当前的主机名（也就是那个 IP），否则用 listen 里写死的地址。 */
+	if (l && isLocalHostName(window.location.hostname)) {
+		/* 回环监听：只有反代能到达本机 —— 有对外地址就用它；没有就如实说"只能在路由器上打开"，
+		   别把它标成"局域网地址"（那个地址在别的机器上连不通）。 */
+		if (isLoopback(l.host)) {
+			if (ext)
+				return { url: ext, src: _('from allow_origins') };
+
+			return {
+				url: 'http://%s:%s/ui/'.format(l.host, l.port),
+				src: _('from listen (loopback, so it only opens on the router itself)')
+			};
+		}
+
 		return {
-			url: 'http://%s:%s/ui/'.format(window.location.hostname || '127.0.0.1', l.port),
+			url: 'http://%s:%s/ui/'.format(
+				isWildcard(l.host) ? (window.location.hostname || '127.0.0.1') : l.host, l.port),
 			src: _('LAN address (from listen)'),
 			alt: ext
 		};
+	}
 
-	if (l)
-		return {
-			url: 'http://%s:%s/ui/'.format(l.host, l.port),
-			src: isLoopback(l.host)
-				? _('from listen (loopback, so it only opens on the router itself)')
-				: _('from listen')
-		};
-
+	/* ③ 用域名访问 LuCI：域名是前置反代，裸监听端口未必对它开放 ——
+	      这时该用 native_api 里配好的对外地址（allow_origins / allowed_hosts），而不是现编一个
+	      http://<这个域名>:<端口>/ui/。 */
 	if (ext)
 		return { url: ext, src: _('from allow_origins') };
 
@@ -245,7 +279,17 @@ function panelUrl(cfg) {
 			src: _('from allowed_hosts (protocol taken from this page)')
 		};
 
-	return null;
+	/* ④ 配置里也没有对外地址：退回监听地址本身 */
+	if (!l)
+		return null;
+
+	return {
+		url: 'http://%s:%s/ui/'.format(
+			isWildcard(l.host) ? (window.location.hostname || '127.0.0.1') : l.host, l.port),
+		src: isLoopback(l.host)
+			? _('from listen (loopback, so it only opens on the router itself)')
+			: _('from listen')
+	};
 }
 
 /* 面板没在提供服务的第一个原因；都正常时返回 null。

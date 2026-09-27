@@ -4,7 +4,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-honk
 PKG_VERSION:=2.0.0
-PKG_RELEASE:=31
+PKG_RELEASE:=32
 
 LUCI_TITLE:=LuCI support for honk
 LUCI_PKGARCH:=all

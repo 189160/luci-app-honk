@@ -69,8 +69,12 @@ uci set honk.config.enabled=1 && uci commit honk
 doona 的玻璃主题自带一张 `position:fixed` + `backdrop-filter` 的遮罩层（`.rp-shell:after`），
 在部分浏览器上会盖住面板内容。顶层新标签页不受前两条限制，第三条也只在面板自己的文档里发生。
 
-地址由 `/usr/libexec/honk-native-api-probe` 交出原始字段后推导：`allow_origins` 唯一项 →
-`allowed_hosts` 唯一项 → `listen`（具体 IP 用它 / 通配监听取当前访问的主机名 / 回环地址只能在路由器本机打开）。
+地址由 `/usr/libexec/honk-native-api-probe` 交出原始字段后推导，按「你此刻怎么访问 LuCI」分叉：
+当前主机名就在 `allow_origins` / `allowed_hosts` 里 → 直接用那一条；用 **IP** 访问 LuCI →
+按 `listen` 推导（通配就用当前那个 IP，回环则注明只能在路由器本机打开）；用**域名**访问 →
+用 `native_api` 里配的对外地址（`allow_origins` → `allowed_hosts`）——域名是前置反代，
+裸监听端口对它未必开放，现编 `http://<该域名>:<端口>/ui/` 多半不通。
+用 IP 访问而配置里有对外地址时，后者作为该行的附注给出。
 
 面板已是最新（版本与目录内的标记一致）时点「更新面板」会**直接跳过**，不会白下 12 MB；
 目录里缺 `index.html` 时不跳过 —— 那正是要用官方 release 修的场景。需要强制重下时用
