@@ -129,44 +129,191 @@ msgstr "API 设置"
 msgid "Configure the native API listener. Saving requires a service restart to take effect."
 msgstr "配置原生 API 监听。保存后需重启服务方可生效。"
 
-msgid "Open API Settings"
-msgstr "打开 API 设置"
-
-msgid "Open Global Settings"
-msgstr "打开全局设置"
-
-msgid "The honk service is disabled. Enable it on the Global Settings page."
-msgstr "honk 服务已停用，请到「全局设置」页启用。"
-
-msgid "Unable to read the native API status: %s"
-msgstr "无法读取原生 API 状态：%s"
-
 msgid "WebUI"
 msgstr "WebUI"
 
-msgid "No Web UI is configured. Set ui to embedded to serve the built-in doona panel."
-msgstr "未配置 Web UI。把 ui 设为 embedded 即可直接用内嵌的 doona 面板。"
+msgid "A newer release is available: %s"
+msgstr "有新版本：%s"
 
-msgid "No native API configuration file was found. Create one on the API Settings page."
-msgstr "未找到原生 API 配置文件，请到「API 设置」页创建一个。"
+msgid "Access key configured"
+msgstr "访问密钥已配置"
 
-msgid "The native API listener is disabled, so nothing is served."
-msgstr "原生 API 监听未启用，因此没有内容可托管。"
+msgid "Address, status and updates for the panel. Updating the panel needs no service restart; the first install, and any change to the panel directory (ui), needs one."
+msgstr "面板的地址、状态与更新。更新面板无需重启服务；首次安装、或改动 honk 的面板目录（ui）时需要重启服务。"
 
-msgid "The panel is not reachable. native_api settings only take effect after a service restart."
-msgstr "面板连不上。native_api 的字段只有重启服务后才生效。"
+msgid "Another update is already running"
+msgstr "另一个更新正在进行"
 
-msgid "This build refuses to be embedded (X-Frame-Options: DENY), so the frame would stay blank. Use a build from ca465bcc0 or later."
-msgstr "此二进制拒绝被内嵌（X-Frame-Options: DENY），内嵌会是一片空白。请改用 ca465bcc0 之后的构建。"
+msgid "Cancel"
+msgstr "取消"
 
-msgid "Unable to determine the panel address from the native API configuration."
-msgstr "无法从原生 API 配置里确定面板地址。"
+msgid "Checking for a newer release..."
+msgstr "正在检查新版本..."
 
-msgid "unparsable probe output"
-msgstr "探测输出无法解析"
+msgid "Continue"
+msgstr "继续"
 
-msgid "The configuration file has no effective native_api block — it is most likely commented out. Uncomment it and set a secret, then restart the service."
-msgstr "配置文件里没有生效的 native_api 块 —— 多半是整段被注释掉了。取消注释并填好 secret，然后重启服务。"
+msgid "Custom"
+msgstr "自定义"
 
-msgid "The panel listens on loopback only, so a browser on another machine cannot reach it. Set listen to 0.0.0.0:9527 (or use the router itself)."
-msgstr "面板只监听 loopback，别的机器上的浏览器访问不到。请把 listen 改成 0.0.0.0:9527（或在路由器本机访问）。"
+msgid "Doona (default)"
+msgstr "Doona（默认）"
+
+msgid "Downloading and verifying the release. This can take a while."
+msgstr "正在下载并校验 release，可能需要一段时间。"
+
+msgid "Extracting the archive failed"
+msgstr "解压失败"
+
+msgid "No access key configured"
+msgstr "未配置访问密钥"
+
+msgid "No native API configuration file was found"
+msgstr "没有找到 native API 配置文件"
+
+msgid "No panel directory is configured"
+msgstr "未配置面板目录"
+
+msgid "Not enough free space"
+msgstr "可用空间不足"
+
+msgid "Not enough free space: %s KB available, %s KB required"
+msgstr "可用空间不足：可用 %s KB，需要 %s KB"
+
+msgid "Not updated from this page"
+msgstr "不由本页更新"
+
+msgid "Open Panel"
+msgstr "打开面板"
+
+msgid "Overwrite the panel directory?"
+msgstr "覆盖面板目录？"
+
+msgid "Panel"
+msgstr "面板"
+
+msgid "Panel address"
+msgstr "面板地址"
+
+msgid "Panel directory %s"
+msgstr "面板目录 %s"
+
+msgid "Panel updated to version %s."
+msgstr "面板已更新到 %s。"
+
+msgid "Refresh Status"
+msgstr "刷新状态"
+
+msgid "Replacing the panel directory failed"
+msgstr "替换面板目录失败"
+
+msgid "Set a panel directory on the API Settings page first"
+msgstr "先在 API 设置里指定面板目录"
+
+msgid "The checksum did not match"
+msgstr "校验和不匹配"
+
+msgid "The configured panel directory is not a usable absolute path"
+msgstr "配置的面板目录不是可用的绝对路径"
+
+msgid "The directory %s was not installed from this page. Updating replaces its contents with the official release and keeps no copy of the current files."
+msgstr "%s 不是本页安装的。更新会用官方 release 的文件替换目录内现有内容，不保留副本。"
+
+msgid "The download failed"
+msgstr "下载失败"
+
+msgid "The downloaded archive is not usable"
+msgstr "下载的归档不可用"
+
+msgid "The honk service is disabled"
+msgstr "honk 服务未启用"
+
+msgid "The native API listener is disabled"
+msgstr "native API 监听未启用"
+
+msgid "The native_api block is commented out or missing"
+msgstr "native_api 配置块被注释掉或不存在"
+
+msgid "The panel directory does not exist"
+msgstr "面板目录不存在"
+
+msgid "The panel directory holds no readable index.html"
+msgstr "面板目录里没有可读的 index.html"
+
+msgid "The panel directory was not installed from this page"
+msgstr "面板目录不是本页安装的"
+
+msgid "The panel does not answer; native_api changes need a service restart"
+msgstr "面板无响应；native_api 的改动需要重启服务"
+
+msgid "The panel files are maintained elsewhere. Updating replaces the contents of the directory with the official release after a confirmation. Set ui on the API Settings page to the absolute path of the directory, with a readable index.html in it and the fonts in a fonts subdirectory next to it."
+msgstr "面板文件由其他地方维护。更新会在确认后用官方 release 覆盖该目录的内容。在 API 设置里把 ui 设为面板目录的绝对路径，目录内需有可读的 index.html，字体放在同级的 fonts 子目录。"
+
+msgid "The panel is fetched from the official release, verified against SHA256SUMS and unpacked over the panel directory. That directory comes from ui in the honk configuration and has to be writable."
+msgstr "面板取自官方 release，经 SHA256SUMS 校验后解压覆盖面板目录。该目录来自 honk 配置里的 ui，需要可写。"
+
+msgid "The update failed"
+msgstr "更新失败"
+
+msgid "This build does not embed the panel"
+msgstr "当前二进制不含内嵌面板"
+
+msgid "Unable to determine the latest release"
+msgstr "无法取得最新 release 版本号"
+
+msgid "Unable to determine whether a newer release exists"
+msgstr "无法判定是否有新版本"
+
+msgid "Unparsable output from %s"
+msgstr "%s 的输出无法解析"
+
+msgid "Up to date"
+msgstr "已是最新"
+
+msgid "Update Panel"
+msgstr "更新面板"
+
+msgid "Update anyway"
+msgstr "仍然更新"
+
+msgid "Update source"
+msgstr "更新来源"
+
+msgid "Updating replaces the contents of %s with the official release and keeps no copy of the current files."
+msgstr "更新会用官方 release 的文件替换 %s 内的内容，不保留现有文件的副本。"
+
+msgid "Updating..."
+msgstr "更新中..."
+
+msgid "Version %s"
+msgstr "版本 %s"
+
+msgid "Version unknown"
+msgstr "版本未知"
+
+msgid "allow_origins has several entries, so listen is used"
+msgstr "allow_origins 有多个条目，按 listen 推导"
+
+msgid "from allow_origins"
+msgstr "来自 allow_origins"
+
+msgid "from allowed_hosts (protocol taken from this page)"
+msgstr "来自 allowed_hosts（协议取当前访问方式）"
+
+msgid "from listen"
+msgstr "按 listen 推导"
+
+msgid "from listen (loopback, so it only opens on the router itself)"
+msgstr "按 listen 推导（回环地址，只能在路由器本机打开）"
+
+msgid "from listen (wildcard, so the host name of this page is used)"
+msgstr "按 listen 推导（通配监听，取当前访问的主机名）"
+
+msgid "ui is not an absolute path"
+msgstr "ui 不是绝对路径"
+
+msgid "ui is set to embedded, which this build does not provide"
+msgstr "ui 为 embedded，当前二进制不含内嵌面板"
+
+msgid "unset"
+msgstr "未设置"

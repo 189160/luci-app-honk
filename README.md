@@ -60,18 +60,26 @@ uci set honk.config.enabled=1 && uci commit honk
 | Routing Settings | `/etc/honk/config.d/route.dae`（编辑器） |
 | Logs | `/var/log/honk/honk.log`（实时日志，末尾 1000 行） |
 | API Settings | `/etc/honk/config.d/api.dae`（编辑器，`native_api` / `clash_api`） |
-| WebUI | 直接把 native_api 托管的面板嵌进页面（正常时页面上只有面板本身） |
+| WebUI | 面板的地址、状态与更新（面板在新标签页打开，不嵌在本页） |
 
-**WebUI 页**只做一件事：把 native_api 托管的面板嵌进页面。正常情况页面上**只有面板**，
-没有任何多余内容；只有**没法显示面板**时才出现一行提示（服务停用 / 无配置文件 /
-native_api 未启用 / `ui` 未配置 / 连不上 / 该二进制拒绝被内嵌）。
+**WebUI 页**显示面板地址、运行状态、目录与版本，并提供「更新面板」与「刷新状态」。
 
-⚠️ **能否内嵌取决于二进制版本**：honk 自 `ca465bcc0`（`fix(native-api): let dashboards embed the served UI`）
-起删掉了面板静态响应的 `X-Frame-Options: DENY`，源码注释写明是为让 LuCI 这类面板**跨端口**嵌入；
-更早的二进制仍会发该头，iframe 会被浏览器**静默拒绝**（JS 拿不到错误，`onload` 甚至可能照常触发）。
-因此这项判断由 `/usr/libexec/honk-native-api-probe` 在**路由器侧读响应头**完成 ——
-浏览器侧既跨源、又拿不到被拒的错误，只能服务端判。该脚本同时给出面板是否可达与监听地址，
-据此外推面板 URL（具体 IP 用它 / 通配监听用访问主机名 / loopback 用 127.0.0.1）。
+面板在**新标签页**打开，不嵌在本页，原因有三条：跨源 iframe 被 `X-Frame-Options` / CSP 拒绝时浏览器
+不给任何反馈，只会渲染空白；本页走 https 而面板走 http 时 iframe 还会命中混合内容拦截；
+doona 的玻璃主题自带一张 `position:fixed` + `backdrop-filter` 的遮罩层（`.rp-shell:after`），
+在部分浏览器上会盖住面板内容。顶层新标签页不受前两条限制，第三条也只在面板自己的文档里发生。
+
+地址由 `/usr/libexec/honk-native-api-probe` 交出原始字段后推导：`allow_origins` 唯一项 →
+`allowed_hosts` 唯一项 → `listen`（具体 IP 用它 / 通配监听取当前访问的主机名 / 回环地址只能在路由器本机打开）。
+
+**更新面板**由 `/usr/libexec/honk-panel-update` 执行（root，经 rpcd 调用）：目标目录取自 `ui`，
+只接受绝对路径，因此页面显示的目录与脚本写入的目录天然一致，脚本也不接受任何 URL 或路径参数。
+更新源固定为 `Zakkaus/doona` 的最新 release，程序包与字体包解到同一个 staging 目录后原子替换；
+目录已存在且没有本页写的 `.honk-panel.json` 标记时，必须带 `--overwrite` 才允许覆盖。
+替换面板目录内容不需要重启服务；首次安装、或改动 `ui` 的值需要重启。
+
+版本号要**直连** `github.com` 取（加速站如 ghfast.top 只镜像资产下载，不转发 release 页面与 API），
+资产下载走 `uci honk.config.gh_proxy`，默认 `https://ghfast.top`，置空即直连。
 
 **让 doona 的面板内编辑可用**：需要 `config_write: true` + 非空 `secret`（或密码模式），否则所有配置源都是只读。
 随包附带 `/etc/honk/config.d/api.dae` —— 一份精简的 `native_api` 配置参考（`enabled: false`，默认不启动监听）。
@@ -92,7 +100,7 @@ writable = config_write && credentialed()
 **保存与生效是刻意的两步**，不是一次操作：
 
 - Save / Save & Apply **只写盘**，并在提示里告诉你去点哪个按钮，**不会自动重载**。honk 文档写明「所有生效字段都要求重启；SIGHUP 拒绝其变更并保留当前 listener 与配置代次」—— 自动重载只会让用户以为已经生效。
-- 真正生效由配置卡片里的按钮触发：默认「重载服务 → 立即重载」（`hot_reload`）；**API & Web UI 页是「重启服务 → 立即重启」**（`restart`），因为该文件里的 `native_api` 字段不支持热改。按钮名由视图传入的 `reloadAction` / `reloadLabel` / `reloadNowLabel` 定制。
+- 真正生效由配置卡片里的按钮触发：默认「重载服务 → 立即重载」（`hot_reload`）；**API Settings 页是「重启服务 → 立即重启」**（`restart`），因为该文件里的 `native_api` 字段不支持热改。按钮名由视图传入的 `reloadAction` / `reloadLabel` / `reloadNowLabel` 定制。
 - Reset 只把编辑器内容重新读回磁盘版本，不写盘。
 
 文件写入与服务动作的执行权限由 `root/usr/share/rpcd/acl.d/luci-app-honk.json` 精确声明；运行状态由 `root/usr/libexec/honk-status` 提供（只放开该脚本的执行权限，不放开 `/proc`）。

@@ -31,7 +31,8 @@
 				"/etc/honk/config.d/dns.dae": [ "write" ],
 				"/etc/honk/config.d/node.dae": [ "write" ],
 				"/etc/honk/config.d/route.dae": [ "write" ],
-				"/etc/honk/config.d/api.dae": [ "write" ]
+				"/etc/honk/config.d/api.dae": [ "write" ],
+				"/usr/libexec/honk-panel-update": [ "exec" ]
 			}
 		}
 	}

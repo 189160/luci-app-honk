@@ -1,0 +1,365 @@
+#!/bin/sh
+#
+# 面板更新：从 doona 官方 release 下载、校验并替换面板目录内容。
+# 由 htdocs/luci-static/resources/view/honk/webui.js 通过 fs.exec_direct 调用，root 运行。
+#
+# 用法：honk-panel-update --action check|update [--overwrite]
+#   check   只读：解析最新 tag，与已装版本比对
+#   update  替换面板目录内容（不需要重启 honk；改动 ui 的值才需要重启）
+#
+# 安全约定（重要）：
+#   1) 不接受 URL、也不接受目标路径 —— 目标目录由本脚本自己从 api.dae 的 ui 推导，
+#      因此页面显示的目录与这里写的目录天然一致，也没有注入面；
+#   2) 目标目录已存在且没有本脚本的标记文件时，必须带 --overwrite 才允许覆盖；
+#   3) 归档成员逐个校验（拒绝绝对路径与 ..），先解到 staging、校验通过再交换。
+#
+# 已知取舍（与用户确认过）：
+#   - 不保留旧版本副本（交换完成即删除旧目录）；
+#   - 更新目标固定为最新 release，不支持指定 tag / 降级；
+#   - SHA256SUMS 与包同源，防不住上游被整体投毒。
+
+set -u
+
+PROBE=/usr/libexec/honk-native-api-probe
+GH_PATH=Zakkaus/doona
+GITHUB=https://github.com/$GH_PATH
+LOCK_DIR=/var/lock/honk-panel.lock
+MIN_KB=24576          # 下载 9.6 MB + 解压 11.3 MB，留余量
+
+ACTION=""
+OVERWRITE=0
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+		--action)
+			ACTION="${2:-}"
+			shift 2
+			;;
+		--action=*)
+			ACTION="${1#*=}"
+			shift
+			;;
+		--overwrite)
+			OVERWRITE=1
+			shift
+			;;
+		*)
+			shift
+			;;
+	esac
+done
+
+TMP=""
+STAGE=""
+OLD=""
+SWAPPED=0
+LOCKED=0
+
+esc() {
+	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+out() {
+	printf '{"ok":%s,"action":"%s"%s}\n' "$1" "${ACTION:-unknown}" "$2"
+}
+
+fail() {
+	out false ",\"error\":\"$1\",\"message\":\"$(esc "${2:-}")\""
+	exit 0
+}
+
+cleanup() {
+	[ -n "$STAGE" ] && [ "$SWAPPED" = 0 ] && rm -rf "$STAGE"
+	[ -n "$TMP" ] && rm -rf "$TMP"
+	# 交换途中被打断时把旧目录放回去（成功路径里 $OLD 已清空）
+	if [ -n "$OLD" ] && [ -d "$OLD" ]; then
+		[ -d "$UI" ] || mv "$OLD" "$UI" 2>/dev/null
+		[ -d "$UI" ] && rm -rf "$OLD"
+	fi
+	# 锁目录里放了 pid 文件，清理要用 rm -rf（rmdir 因非空会失败）
+	[ "$LOCKED" = 1 ] && rm -rf "$LOCK_DIR" 2>/dev/null
+	return 0
+}
+
+# 清掉被中断的旧进程留下的临时目录（锁已保证互斥，再加 10 分钟年龄门槛兜底）
+clean_stale() {
+	for d in "$(dirname "$UI")/.honk-panel-tmp."* "${UI}.new."* "${UI}.old."*; do
+		[ -e "$d" ] || continue
+		[ -n "$(find "$d" -maxdepth 0 -mmin +10 2>/dev/null)" ] && rm -rf "$d"
+	done
+	return 0
+}
+
+trap 'cleanup' EXIT HUP INT TERM
+
+fetch_stdout() {
+	if command -v curl >/dev/null 2>&1; then
+		curl -fsSL --max-time 30 "$1" 2>/dev/null
+	elif command -v uclient-fetch >/dev/null 2>&1; then
+		uclient-fetch -q "$1" 2>/dev/null
+	fi
+}
+
+fetch_file() {	# fetch_file <url> <dest>；0 成功 / 1 失败 / 2 无可用下载器
+	if command -v curl >/dev/null 2>&1; then
+		curl -fL --retry 2 --max-time 300 -o "$2" "$1" 2>/dev/null
+	elif command -v uclient-fetch >/dev/null 2>&1; then
+		uclient-fetch -O "$2" "$1" 2>/dev/null
+	else
+		return 2
+	fi
+}
+
+head_location() {	# 只有 curl 能便宜地取响应头
+	command -v curl >/dev/null 2>&1 || return 0
+	curl -fsSI --max-time 20 "$1" 2>/dev/null \
+		| tr -d '\r' | sed -n 's#^[Ll]ocation: .*releases/tag/##p' | head -n 1
+}
+
+# 取元数据的候选 URL：先直连、再走加速站。
+# 实测（2026-09-27）加速站的覆盖面：/releases/latest 的重定向可用（302 指向
+# /https://github.com/.../releases/tag/<tag>，这里的 sed 能吃下那个多余的前导斜杠），
+# 而 releases 列表页、releases.atom、api.github.com 一律返回空 —— 多试一次只是白跑一趟，
+# 换来的是「github.com 直连不通、但加速站通」时仍能取到版本号。
+meta_urls() {
+	printf '%s\n' "${GITHUB}$1"
+	if [ -n "$PROXY" ]; then
+		printf '%s\n' "$(gurl "${GITHUB}$1")"
+	fi
+	return 0
+}
+
+case "$ACTION" in
+	check|update) ;;
+	*) fail bad_action "--action 必须是 check 或 update" ;;
+esac
+
+# ---- 代理前缀：uci 显式设置即以它为准（空值 = 直连），未设置时用默认加速站 ----
+if PROXY=$(uci -q get honk.config.gh_proxy 2>/dev/null); then
+	:
+else
+	PROXY=https://ghfast.top
+fi
+
+# 前缀拼接必须带斜杠：ghfast.top 与前缀里都自带 scheme，直接相连会变成
+# https://ghfast.tophttps://github.com/... （实测踩过）
+gurl() {
+	if [ -n "$PROXY" ]; then
+		printf '%s/%s' "${PROXY%/}" "$1"
+	else
+		printf '%s' "$1"
+	fi
+}
+
+# ---- 目标目录：从 probe 的 configured.ui 推导，只接受绝对路径 ----
+PJSON=$("$PROBE" 2>/dev/null || true)
+
+jfield() {
+	printf '%s' "$PJSON" | sed -n "s/.*\"$1\":\"\([^\"]*\)\".*/\1/p" | head -n 1
+}
+
+UI=$(jfield ui)
+UI="${UI%/}"
+
+case "$UI" in
+	'') fail no_dir "api.dae 的 native_api.ui 为空，先在 API 设置里指定面板目录" ;;
+	embedded) fail embedded "ui 为 embedded，当前二进制不含 native-ui；请在 API 设置里改为目录路径" ;;
+	/*) ;;
+	*) fail bad_dir "ui 不是绝对路径（$UI），相对路径的解析依赖运行目录，请改写为绝对路径" ;;
+esac
+case "/$UI/" in
+	*'/../'*|*'/./'*) fail bad_dir "ui 含有 . 或 .. 段" ;;
+esac
+[ "$UI" != "/" ] || fail bad_dir "ui 不能是根目录"
+
+INSTALLED=$(jfield version)
+MANAGED=$(printf '%s' "$PJSON" | sed -n 's/.*"managed":\([a-z]*\).*/\1/p' | head -n 1)
+[ -n "$MANAGED" ] || MANAGED=false
+
+# ---- 目标目录不是本脚本安装的：必须显式授权覆盖 ----
+if [ "$ACTION" = update ] && [ -d "$UI" ] && [ "$MANAGED" = false ] && [ "$OVERWRITE" != 1 ]; then
+	fail needs_overwrite "目标目录 $UI 不是本页安装的，覆盖需要确认"
+fi
+
+# ---- 解析最新 tag ----
+# 通道按可靠性排序，每条都先直连、再走加速站（见 meta_urls 的说明）。
+# 取不到即 fail，不做任何猜测。
+extract_atom() {
+	fetch_stdout "$1" | grep -oE '/releases/tag/[^"<]+' | head -n 1 | sed 's#.*/tag/##'
+}
+extract_page() {
+	fetch_stdout "$1" | grep -oE '/releases/tag/[^"?]+' | head -n 1 | sed 's#.*/tag/##'
+}
+extract_api() {
+	fetch_stdout "$1" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1
+}
+
+try_head() {	# /releases/latest 只在最新发布不是 prerelease 时给出 tag
+	for u in $(meta_urls "/releases/latest"); do
+		t=$(head_location "$u")
+		[ -n "$t" ] && { printf '%s' "$t"; return 0; }
+	done
+	return 0
+}
+try_atom() {
+	for u in $(meta_urls "/releases.atom"); do
+		t=$(extract_atom "$u")
+		[ -n "$t" ] && { printf '%s' "$t"; return 0; }
+	done
+	return 0
+}
+try_page() {
+	for u in $(meta_urls "/releases"); do
+		t=$(extract_page "$u")
+		[ -n "$t" ] && { printf '%s' "$t"; return 0; }
+	done
+	return 0
+}
+# api.github.com 是另一台主机（加速站不代理它），匿名调用常年 403，只作最后兜底
+try_api() {
+	extract_api "https://api.github.com/repos/${GH_PATH}/releases?per_page=1"
+	return 0
+}
+
+TAG=$(try_head)
+[ -n "$TAG" ] || TAG=$(try_atom)
+[ -n "$TAG" ] || TAG=$(try_page)
+[ -n "$TAG" ] || TAG=$(try_api)
+[ -n "$TAG" ] || fail tag_failed "无法取得最新 release 版本号（需要能访问 github.com；加速站只支持 releases/latest）"
+case "$TAG" in
+	*[!A-Za-z0-9._-]*) fail tag_failed "tag 含非法字符：$TAG" ;;
+esac
+VER="${TAG#v}"
+
+if [ "$ACTION" = check ]; then
+	AVAIL=true
+	[ "$INSTALLED" = "$VER" ] && AVAIL=false
+	out true ",\"dir\":\"$(esc "$UI")\",\"installed\":\"$(esc "$INSTALLED")\",\"latest\":\"$(esc "$VER")\",\"update_available\":$AVAIL,\"exists\":$( [ -d "$UI" ] && echo true || echo false ),\"managed\":$MANAGED"
+	exit 0
+fi
+
+# ---- 取资产 URL（按 tag 的资产清单，不猜文件名）----
+ASSETS=$(fetch_stdout "$(gurl "${GITHUB}/releases/expanded_assets/${TAG}")")
+URLS=$(printf '%s' "$ASSETS" \
+	| grep -oE "href=\"/${GH_PATH}/releases/download/${TAG}/[^\"]+\.tar\.gz\"" \
+	| sed 's#^href="/#https://github.com/#; s#"$##' | sort -u)
+PROG_URL=$(printf '%s\n' "$URLS" | grep -v 'fonts' | head -n 1)
+FONTS_URL=$(printf '%s\n' "$URLS" | grep 'fonts' | head -n 1)
+[ -n "$PROG_URL" ] || fail tag_failed "该 release 里没有程序包（$TAG）"
+[ -n "$FONTS_URL" ] || fail tag_failed "该 release 里没有字体包（$TAG）"
+
+# ---- 并发锁：mkdir 原子；锁里记 pid，进程已消失或超过 10 分钟即视为残留；锁目录不可用时不加锁继续 ----
+acquire_lock() {
+	mkdir -p "$(dirname "$LOCK_DIR")" 2>/dev/null || return 2
+	if mkdir "$LOCK_DIR" 2>/dev/null; then
+		echo $$ > "$LOCK_DIR/pid" 2>/dev/null
+		LOCKED=1
+		return 0
+	fi
+	oldpid=$(cat "$LOCK_DIR/pid" 2>/dev/null)
+	if [ -z "$oldpid" ] || ! kill -0 "$oldpid" 2>/dev/null \
+		|| [ -n "$(find "$LOCK_DIR" -mmin +10 2>/dev/null)" ]; then
+		rm -rf "$LOCK_DIR" 2>/dev/null
+		if mkdir "$LOCK_DIR" 2>/dev/null; then
+			echo $$ > "$LOCK_DIR/pid" 2>/dev/null
+			LOCKED=1
+			return 0
+		fi
+	fi
+	return 1
+}
+acquire_lock
+lock_rc=$?
+if [ "$lock_rc" = 1 ]; then
+	fail busy "另一个更新正在进行"
+elif [ "$lock_rc" = 2 ]; then
+	echo "honk-panel-update: 锁目录 $LOCK_DIR 不可用，本次不加锁继续" >&2
+fi
+
+# 清掉上一次被中断的更新留下的临时目录；此时锁已持有，不会有并发写入
+[ "$ACTION" = update ] && clean_stale
+
+# ---- 空间预检：放在下载之前；从目标目录向上找第一个已存在的祖先来测可用空间 ----
+FREE_DIR=$(dirname "$UI")
+while [ ! -d "$FREE_DIR" ] && [ "$FREE_DIR" != "/" ]; do
+	FREE_DIR=$(dirname "$FREE_DIR")
+done
+FREE_KB=$(df -k "$FREE_DIR" 2>/dev/null | awk 'NR==2{print $4}')
+[ -n "$FREE_KB" ] || FREE_KB=0
+
+# 数值单独给出：页面要按自己的语言拼这句话，只靠 message 就成了中文硬编码
+if [ "$FREE_KB" -lt "$MIN_KB" ]; then
+	out false ",\"error\":\"no_space\",\"free_kb\":$FREE_KB,\"need_kb\":$MIN_KB,\"dir\":\"$(esc "$FREE_DIR")\",\"message\":\"可用空间不足：${FREE_KB} KB，需要 ${MIN_KB} KB（目标分区 $FREE_DIR）\""
+	exit 0
+fi
+
+# ---- 下载 ----
+TMP="$(dirname "$UI")/.honk-panel-tmp.$$"
+rm -rf "$TMP"
+mkdir -p "$TMP" || fail download_failed "无法创建临时目录 $TMP"
+STAGE="${UI}.new.$$"
+OLD="${UI}.old.$$"
+
+PNAME=$(basename "$PROG_URL")
+FNAME=$(basename "$FONTS_URL")
+
+fetch_file "$(gurl "$PROG_URL")" "$TMP/$PNAME" || fail download_failed "下载程序包失败"
+fetch_file "$(gurl "$FONTS_URL")" "$TMP/$FNAME" || fail download_failed "下载字体包失败"
+fetch_file "$(gurl "${GITHUB}/releases/download/${TAG}/SHA256SUMS")" "$TMP/SHA256SUMS" || fail download_failed "下载 SHA256SUMS 失败"
+
+[ -s "$TMP/$PNAME" ] && [ -s "$TMP/$FNAME" ] && [ -s "$TMP/SHA256SUMS" ] || fail download_failed "下载的文件为空"
+
+# ---- 校验：只核对本次用到的两个包 ----
+PROG_SHA=$(awk -v n="$PNAME" '$2 == n { print $1 }' "$TMP/SHA256SUMS" | head -n 1)
+FONTS_SHA=$(awk -v n="$FNAME" '$2 == n { print $1 }' "$TMP/SHA256SUMS" | head -n 1)
+[ -n "$PROG_SHA" ] && [ -n "$FONTS_SHA" ] || fail checksum_failed "SHA256SUMS 里没有这两个包"
+(
+	cd "$TMP" || exit 1
+	printf '%s  %s\n%s  %s\n' "$PROG_SHA" "$PNAME" "$FONTS_SHA" "$FNAME" > wanted.sums
+	sha256sum -c wanted.sums >/dev/null 2>&1
+) || fail checksum_failed "sha256 校验不通过（下载可能被截断或上游已变更）"
+
+# ---- 解压前先校验成员名，再解到 staging ----
+for f in "$TMP/$PNAME" "$TMP/$FNAME"; do
+	bad=$(tar -tzf "$f" 2>/dev/null | grep -E '^/|(^|/)\.\.(/|$)' | head -n 1)
+	[ -z "$bad" ] || fail invalid_archive "归档里有不安全的成员路径：$(basename "$f")"
+done
+
+rm -rf "$STAGE"
+mkdir -p "$STAGE" || fail extract_failed "无法创建 staging 目录"
+tar -xzf "$TMP/$PNAME" -C "$STAGE" || fail extract_failed "解压程序包失败"
+tar -xzf "$TMP/$FNAME" -C "$STAGE" || fail extract_failed "解压字体包失败"
+[ -f "$STAGE/index.html" ] || fail invalid_archive "程序包里没有 index.html"
+
+# 用不到的源包即时删除，省下约 9.6 MB 峰值占用
+rm -f "$TMP/$PNAME" "$TMP/$FNAME" "$TMP/SHA256SUMS" "$TMP/wanted.sums" 2>/dev/null
+
+# ---- 原子交换：同文件系统内的 rename；旧目录交换完成即删除（不保留副本）----
+if [ -d "$UI" ]; then
+	mv "$UI" "$OLD" || fail swap_failed "无法移开现有目录"
+	if ! mv "$STAGE" "$UI"; then
+		mv "$OLD" "$UI" 2>/dev/null
+		fail swap_failed "替换失败，已恢复原目录"
+	fi
+	SWAPPED=1
+	STAGE=""
+	rm -rf "$OLD"
+	OLD=""
+else
+	mkdir -p "$(dirname "$UI")" 2>/dev/null
+	if ! mv "$STAGE" "$UI"; then
+		fail swap_failed "无法创建面板目录 $UI"
+	fi
+	SWAPPED=1
+	STAGE=""
+fi
+
+printf '{"version":"%s","tag":"%s","installed_at":"%s","sha256":{"program":"%s","fonts":"%s"}}\n' \
+	"$(esc "$VER")" "$(esc "$TAG")" "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" \
+	"$PROG_SHA" "$FONTS_SHA" > "$UI/.honk-panel.json" 2>/dev/null || true
+
+BYTES=$(du -sk "$UI" 2>/dev/null | awk '{print $1 * 1024}')
+[ -n "$BYTES" ] || BYTES=0
+
+out true ",\"dir\":\"$(esc "$UI")\",\"from\":\"$(esc "$INSTALLED")\",\"to\":\"$(esc "$VER")\",\"bytes\":$BYTES,\"fonts\":true,\"switched\":true,\"restart_required\":false"
+exit 0

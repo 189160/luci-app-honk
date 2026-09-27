@@ -1,17 +1,18 @@
 #!/bin/sh
 #
-# 供 LuCI 的「WebUI」页决定「能否把面板嵌进页面」，输出 JSON。
+# 供 LuCI 的「WebUI」页显示面板状态，输出 JSON。
 # 由 htdocs/luci-static/resources/view/honk/webui.js 通过 fs.exec_direct 调用。
 #
-# 为什么探测必须放在路由器侧：
-#   1) honk 的 GET /api（discovery）默认不发 CORS 头，浏览器从 LuCI 的源跨源请求会被拦；
-#   2) 更要紧的是 —— **iframe 被 X-Frame-Options 拒绝时是浏览器静默行为**，页面里的 JS
-#      拿不到任何错误（onload 甚至可能照常触发），所以"能不能嵌"只能在服务端读响应头来判断。
-#      本脚本因此多回一个 framing 字段：读 /ui/ 的响应头里有没有 X-Frame-Options。
-#      （`ca465bcc0` 起 honk 已删掉该头以支持被 LuCI 嵌入；更早的二进制仍会发 DENY。）
+# 为什么探测放在路由器侧：
+#   honk 的 GET /api（discovery）默认不发 CORS 头，浏览器从 LuCI 的源跨源请求会被拦；
+#   面板地址与目录内容也只能在设备上读。
 #
-# 只用 shell + awk/sed + 一个 HTTP 客户端（busybox wget 或 uclient-fetch），不依赖 PATH 上的其它命令。
-# discovery/响应头原文不在这里解析 JSON，由 JS 用 JSON.parse 处理。
+# 两点注意：
+#   1) 面板地址的推导（allow_origins → allowed_hosts → listen）由 JS 做，本脚本把原始字段都交出去；
+#   2) 面板目录的推导只处理绝对路径 —— 相对路径的解析顺序含 honk 的 data_dir 与 CWD，
+#      页面据此提示改写为绝对路径（更新脚本同样会拒绝相对路径）。
+#
+# 只用 shell + awk/sed + 一个 HTTP 客户端，不依赖 PATH 上的其它命令。
 
 CFG=/etc/honk/config.d/api.dae
 
@@ -33,7 +34,7 @@ native_block() {
 	'
 }
 
-# 从 native_api 块里取 <key>: <value>。
+# 从 native_api 块里取 <key>: <value>（取第一行）。
 # ⚠️ 去掉尾部空白必须在去引号**之前** —— 否则 `listen: '1.2.3.4:5'   # 注释`
 #    剥掉注释后会剩尾随空格，`s/'$//` 匹配不上，值里会残留一个引号。
 field() {
@@ -43,21 +44,33 @@ field() {
 		| sed "s/[[:space:]]*$//; s/^'//; s/'$//; s/^\"//; s/\"$//; s/[[:space:]]*$//"
 }
 
+# 列表字段：dae 的把列表写成一行 `key: 'a', 'b'`，按逗号切开、逐项去引号，输出一项一行。
+list() {
+	printf '%s\n' "$BLOCK" \
+		| sed -n "s/^[[:space:]]*$1[[:space:]]*:[[:space:]]*//p" \
+		| head -n 1 \
+		| tr ',' '\n' \
+		| sed "s/[[:space:]]*$//; s/^[[:space:]]*//; s/^'//; s/'$//; s/^\"//; s/\"$//" \
+		| sed '/^$/d'
+}
+
+# 把 list 输出的逐行内容拼成 JSON 数组（转义 \ 与 "）。
+list_json() {
+	printf '[%s]' "$(list "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' \
+		| awk 'BEGIN{ORS=""}{printf "%s\"%s\"", (NR>1?",":""), $0}')"
+}
+
+# 单个字符串的 JSON 转义
+esc() {
+	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
 # 普通抓取（只判可达）
 fetch() {
 	if command -v wget >/dev/null 2>&1; then
 		wget -q -O - -T 3 "$1" 2>/dev/null
 	elif command -v uclient-fetch >/dev/null 2>&1; then
 		uclient-fetch -q -O - -T 3 "$1" 2>/dev/null
-	fi
-}
-
-# 抓取并把**响应头**也打出来（-S）。不支持 -S 的客户端会输出空，属预期：此时 framing 记为 unknown。
-fetch_head() {
-	if command -v wget >/dev/null 2>&1; then
-		wget -S -q -O /dev/null -T 3 "$1" 2>&1 | tr -d '\r'
-	elif command -v uclient-fetch >/dev/null 2>&1; then
-		uclient-fetch -S -q -O /dev/null -T 3 "$1" 2>&1 | tr -d '\r'
 	fi
 }
 
@@ -80,34 +93,70 @@ fi
 enabled=$(field enabled)
 listen=$(field listen)
 ui=$(field ui)
+secret=$(field secret)
 
 [ -n "$enabled" ] || enabled=false
 [ -n "$listen" ] || listen="127.0.0.1:9527"
+
+# 只输出"有没有"，值本身不出设备
+if [ -n "$secret" ]; then
+	secret_set=true
+else
+	secret_set=false
+fi
 
 port="${listen##*:}"
 url="http://127.0.0.1:$port/ui/"
 
 reachable=false
-body=""
-framing=unknown
 
-if [ "$enabled" = "true" ] && [ -n "$ui" ]; then
-	body=$(fetch "$url")
+if [ "$enabled" = "true" ] && [ -n "$ui" ] && [ "$ui" != "embedded" ]; then
+	[ -n "$(fetch "$url")" ] && reachable=true
+fi
 
-	if [ -n "$body" ]; then
-		reachable=true
+# ---- 面板目录：只处理绝对路径（相对路径交由页面提示改写）----
+dir=""
+absolute=false
+exists=false
+has_index=false
+writable=false
+title=""
+version=""
+managed=false
 
-		head=$(fetch_head "$url")
+case "$ui" in
+	/*) dir="$ui"; absolute=true ;;
+esac
 
-		if [ -n "$head" ]; then
-			if printf '%s' "$head" | grep -qi '^[[:space:]]*x-frame-options:'; then
-				framing=deny
-			else
-				framing=ok
-			fi
+if [ "$absolute" = true ] && [ "$dir" != "/" ]; then
+	[ -d "$dir" ] && exists=true
+
+	if [ "$exists" = true ]; then
+		[ -r "$dir/index.html" ] && has_index=true
+		[ -w "$dir" ] && writable=true
+		[ -f "$dir/.honk-panel.json" ] && managed=true
+
+		if [ "$has_index" = true ]; then
+			title=$(sed -n 's/.*<title>\(.*\)<\/title>.*/\1/p' "$dir/index.html" 2>/dev/null | head -n 1)
 		fi
+
+		if [ "$managed" = true ]; then
+			version=$(sed -n 's/.*"version":"\([^"]*\)".*/\1/p' "$dir/.honk-panel.json" 2>/dev/null | head -n 1)
+		fi
+		if [ -z "$version" ] && [ -r "$dir/CHANGELOG.md" ]; then
+			version=$(sed -n 's/^## \[\([^]]*\)\].*/\1/p' "$dir/CHANGELOG.md" 2>/dev/null | head -n 1)
+		fi
+	else
+		# 目录还不存在（首次安装）：以父目录可写为准
+		parent=$(dirname "$dir")
+		[ -w "$parent" ] && writable=true
 	fi
 fi
 
-printf '{"configured":{"present":%s,"enabled":%s,"block_present":%s,"listen":"%s","ui":"%s"},"probe":{"reachable":%s,"framing":"%s"}}\n' \
-	"$present" "$enabled" "$block_present" "$listen" "$ui" "$reachable" "$framing"
+printf '{"configured":{"present":%s,"enabled":%s,"block_present":%s,"listen":"%s","ui":"%s","secret_configured":%s,"allow_origins":%s,"allowed_hosts":%s},' \
+	"$present" "$enabled" "$block_present" "$(esc "$listen")" "$(esc "$ui")" "$secret_set" "$(list_json allow_origins)" "$(list_json allowed_hosts)"
+
+printf '"probe":{"reachable":%s},' "$reachable"
+
+printf '"panel":{"dir":"%s","absolute":%s,"exists":%s,"index":%s,"writable":%s,"title":"%s","version":"%s","managed":%s}}\n' \
+	"$(esc "$dir")" "$absolute" "$exists" "$has_index" "$writable" "$(esc "$title")" "$(esc "$version")" "$managed"
