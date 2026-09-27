@@ -99,15 +99,29 @@ fi
 # ------------------------------------------------- 获取最新 Release（不走 GitHub API，避免 403）
 info "查询最新 Release ..."
 
-get_latest_tag() {
-    loc=$(curl -fsSI --max-time 20 "$(gurl "https://github.com/$REPO/releases/latest")" 2>/dev/null \
-        | tr -d '\r' | sed -n 's#^[Ll]ocation: .*/releases/tag/##p')
-    if [ -z "$loc" ]; then
-        page=$(curl -fsSL --max-time 30 "$(gurl "https://github.com/$REPO/releases")" 2>/dev/null)
-        loc=$(printf '%s' "$page" | grep -oE '/releases/tag/[^"?]+' | head -1 | sed 's#.*/tag/##')
+# 候选 URL：先直连，再走加速站。
+# 加速站只镜像 assets 下载与 /releases/latest 的重定向；releases 列表页走代理一律返回空
+# （实测 2026-09-27），所以两条通道都要试，不能只靠代理。
+rel_urls() {
+    printf '%s\n' "https://github.com/$REPO$1"
+    if [ -n "$GH_PROXY" ]; then
+        printf '%s\n' "$(gurl "https://github.com/$REPO$1")"
     fi
-    [ -n "$loc" ] || return 1
-    printf '%s' "$loc"
+    return 0
+}
+
+get_latest_tag() {
+    for u in $(rel_urls /releases/latest); do
+        loc=$(curl -fsSI --max-time 20 "$u" 2>/dev/null \
+            | tr -d '\r' | sed -n 's#^[Ll]ocation: .*/releases/tag/##p')
+        [ -n "$loc" ] && { printf '%s' "$loc"; return 0; }
+    done
+    for u in $(rel_urls /releases); do
+        page=$(curl -fsSL --max-time 30 "$u" 2>/dev/null)
+        loc=$(printf '%s' "$page" | grep -oE '/releases/tag/[^"?]+' | head -1 | sed 's#.*/tag/##')
+        [ -n "$loc" ] && { printf '%s' "$loc"; return 0; }
+    done
+    return 1
 }
 
 list_assets() {
@@ -231,7 +245,9 @@ install_local_apk() {
     # 安装前先规范化同名残留约束，避免失效的身份哈希约束让整个事务失败
     world_keep "$n"
 
-    if ! apk add --allow-untrusted "$f"; then
+    # </dev/null：本函数是在 `while read ... < "$DECIDED"` 里被调的，
+    # 若 apk 去读 stdin（交互提示等）会把待装清单后面的行吃掉
+    if ! apk add --allow-untrusted "$f" </dev/null; then
         echo "  ✗ $(basename "$f") 安装失败，请看上面的 apk 报错"
         return 1
     fi
