@@ -142,11 +142,16 @@ function originHost(s) {
 	return m ? m[1] : String(s || '').trim().replace(/\/+$/, '');
 }
 
-/* 只有带 scheme 的条目才能直接当 URL 用 */
+/* 只有带 scheme 的条目才能直接当 URL 用。
+   ⚠️ 这里刻意不用正则：luci.mk 用 Crockford 的 jsmin 压缩 htdocs 下的 JS，
+   而 jsmin **不认识正则字面量** —— 写成 /^[a-z]+:\/\//i 时，"结尾的 / 紧跟在 \/ 之后"
+   会在源码里凑出一个字面的 `//`，被 jsmin 当成行注释删到行尾，产出的文件语法错误
+   （V8 报 Invalid regular expression: missing /，且只在设备上复现）。
+   所以判定 scheme 用字符串查找，别引入任何"正则里出现 // 或 /*"的写法。 */
 function originUrl(s) {
 	var v = String(s || '').trim().replace(/\/+$/, '');
 
-	return /^[a-z]+:\/\//i.test(v) ? v + '/ui/' : null;
+	return v.indexOf('://') > 0 ? v + '/ui/' : null;
 }
 
 /* 面板地址。优先级 = 「你此刻怎么访问 LuCI」：
