@@ -5,6 +5,8 @@
 #
 # 只构建 musl 目标（OpenWrt 用 musl；gnu 版对路由器无意义）。
 # 构建逻辑与上游 release.yml 保持一致，仅去掉 release 发布部分、并把 features 做成可输入。
+# 默认**不启用 native-ui**（不内嵌 doona）：面板由 honk 以 `ui: '<目录>'` 托管，便于独立更新 doona。
+# 需要内嵌时把 features 里加上 native-ui（配 experimental.native_api.ui: embedded）。
 # 用完可直接删除本文件。
 
 name: Build honk (native-api)
@@ -17,9 +19,9 @@ on:
         required: true
         default: 'feat/native-api'
       features:
-        description: 'cargo features（逗号分隔）。native-ui 提供内嵌 doona UI（配 experimental.native_api.ui: embedded）'
+        description: 'cargo features（逗号分隔）。默认不含 native-ui：面板请用 ui: <目录>，写 ui: embedded 会启动失败'
         required: true
-        default: 'clash-api,ebpf,rprx,native-api,native-ui'
+        default: 'clash-api,ebpf,rprx,native-api'
 
 permissions:
   contents: read
