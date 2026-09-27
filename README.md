@@ -72,6 +72,11 @@ doona 的玻璃主题自带一张 `position:fixed` + `backdrop-filter` 的遮罩
 地址由 `/usr/libexec/honk-native-api-probe` 交出原始字段后推导：`allow_origins` 唯一项 →
 `allowed_hosts` 唯一项 → `listen`（具体 IP 用它 / 通配监听取当前访问的主机名 / 回环地址只能在路由器本机打开）。
 
+面板已是最新（版本与目录内的标记一致）时点「更新面板」会**直接跳过**，不会白下 12 MB；
+目录里缺 `index.html` 时不跳过 —— 那正是要用官方 release 修的场景。需要强制重下时用
+`/usr/libexec/honk-panel-update --action update --force`。更新过程中页面每 1.5 秒读一次
+`/tmp/honk-panel-progress.*` 显示阶段与下载百分比（几十字节的 tmpfs 文件，结束时删除）。
+
 **更新面板**由 `/usr/libexec/honk-panel-update` 执行（root，经 rpcd 调用）：目标目录取自 `ui`，
 只接受绝对路径，因此页面显示的目录与脚本写入的目录天然一致，脚本也不接受任何 URL 或路径参数。
 更新源固定为 `Zakkaus/doona` 的最新 release，程序包与字体包解到同一个 staging 目录后原子替换；

@@ -3,9 +3,16 @@
 # 面板更新：从 doona 官方 release 下载、校验并替换面板目录内容。
 # 由 htdocs/luci-static/resources/view/honk/webui.js 通过 fs.exec_direct 调用，root 运行。
 #
-# 用法：honk-panel-update --action check|update [--overwrite]
+# 用法：honk-panel-update --action check|update [--overwrite] [--force]
 #   check   只读：解析最新 tag，与已装版本比对
 #   update  替换面板目录内容（不需要重启 honk；改动 ui 的值才需要重启）
+#           --overwrite 目录不是本页装的时才需要（没有 .honk-panel.json 标记）
+#           --force     已是最新也重下（默认会跳过，省掉 12 MB 下载）
+#
+# 进度：写两个临时文件给页面读（tmpfs，几字节）——
+#   /tmp/honk-panel-progress.stage  阶段名（download-program|download-fonts|verify|extract|swap）
+#   /tmp/honk-panel-progress.bytes  curl -# 的进度条输出（页面取最后一个 NN.N%）；非 curl 时为空
+#   收尾时一并删除。
 #
 # 安全约定（重要）：
 #   1) 不接受 URL、也不接受目标路径 —— 目标目录由本脚本自己从 api.dae 的 ui 推导，
@@ -24,6 +31,8 @@ PROBE=/usr/libexec/honk-native-api-probe
 GH_PATH=Zakkaus/doona
 GITHUB=https://github.com/$GH_PATH
 LOCK_DIR=/var/lock/honk-panel.lock
+PROG_STAGE=/tmp/honk-panel-progress.stage
+PROG_BYTES=/tmp/honk-panel-progress.bytes
 MIN_KB=24576          # 下载 9.6 MB + 解压 11.3 MB，留余量
 
 # 取元数据（版本号 / 资产清单）的网络参数。
@@ -36,6 +45,7 @@ META_BUDGET=25        # 本轮取版本的**总**预算（秒），超了就报 
 
 ACTION=""
 OVERWRITE=0
+FORCE=0
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -49,6 +59,10 @@ while [ $# -gt 0 ]; do
 			;;
 		--overwrite)
 			OVERWRITE=1
+			shift
+			;;
+		--force)
+			FORCE=1
 			shift
 			;;
 		*)
@@ -76,6 +90,16 @@ fail() {
 	exit 0
 }
 
+set_stage() {
+	printf '%s' "$1" > "$PROG_STAGE" 2>/dev/null
+	return 0
+}
+
+clear_progress() {
+	rm -f "$PROG_STAGE" "$PROG_BYTES" 2>/dev/null
+	return 0
+}
+
 cleanup() {
 	[ -n "$STAGE" ] && [ "$SWAPPED" = 0 ] && rm -rf "$STAGE"
 	[ -n "$TMP" ] && rm -rf "$TMP"
@@ -86,6 +110,7 @@ cleanup() {
 	fi
 	# 锁目录里放了 pid 文件，清理要用 rm -rf（rmdir 因非空会失败）
 	[ "$LOCKED" = 1 ] && rm -rf "$LOCK_DIR" 2>/dev/null
+	clear_progress
 	return 0
 }
 
@@ -108,11 +133,17 @@ fetch_stdout() {
 	fi
 }
 
-fetch_file() {	# fetch_file <url> <dest>；0 成功 / 1 失败 / 2 无可用下载器
+fetch_file() {	# fetch_file <url> <dest> <stage>；0 成功 / 1 失败 / 2 无可用下载器
+	set_stage "$3"
 	if command -v curl >/dev/null 2>&1; then
-		curl -fL --retry 2 --max-time 300 -o "$2" "$1" 2>/dev/null
+		# -# 让 curl 自己算进度条；把它写进文件供页面读百分比（重定向会覆盖上一阶段的内容）
+		curl -fL --retry 2 --max-time 300 -# -o "$2" "$1" 2>"$PROG_BYTES"
+		rc=$?
+		rm -f "$PROG_BYTES" 2>/dev/null
+		return $rc
 	elif command -v uclient-fetch >/dev/null 2>&1; then
 		uclient-fetch -O "$2" "$1" 2>/dev/null
+		return $?
 	else
 		return 2
 	fi
@@ -171,6 +202,10 @@ PJSON=$("$PROBE" 2>/dev/null || true)
 
 jfield() {
 	printf '%s' "$PJSON" | sed -n "s/.*\"$1\":\"\([^\"]*\)\".*/\1/p" | head -n 1
+}
+
+jbool() {
+	printf '%s' "$PJSON" | sed -n "s/.*\"$1\":\([a-z][a-z]*\).*/\1/p" | head -n 1
 }
 
 UI=$(jfield ui)
@@ -250,6 +285,14 @@ case "$TAG" in
 esac
 VER="${TAG#v}"
 
+# 已经是最新、且面板目录是健康的 ⇒ 直接跳过，省掉 12 MB 下载（--force 可强制重下）。
+# 目录不健康（缺 index.html）时不跳过 —— 那正是要用官方 release 修的场景。
+if [ "$ACTION" = update ] && [ "$FORCE" != 1 ] && [ "$VER" = "$INSTALLED" ] \
+	&& [ "$(jbool exists)" = true ] && [ "$(jbool index)" = true ]; then
+	out true ",\"skipped\":true,\"reason\":\"up_to_date\",\"dir\":\"$(esc "$UI")\",\"to\":\"$(esc "$VER")\",\"restart_required\":false"
+	exit 0
+fi
+
 if [ "$ACTION" = check ]; then
 	AVAIL=true
 	[ "$INSTALLED" = "$VER" ] && AVAIL=false
@@ -322,13 +365,14 @@ OLD="${UI}.old.$$"
 PNAME=$(basename "$PROG_URL")
 FNAME=$(basename "$FONTS_URL")
 
-fetch_file "$(gurl "$PROG_URL")" "$TMP/$PNAME" || fail download_failed "下载程序包失败"
-fetch_file "$(gurl "$FONTS_URL")" "$TMP/$FNAME" || fail download_failed "下载字体包失败"
-fetch_file "$(gurl "${GITHUB}/releases/download/${TAG}/SHA256SUMS")" "$TMP/SHA256SUMS" || fail download_failed "下载 SHA256SUMS 失败"
+fetch_file "$(gurl "$PROG_URL")" "$TMP/$PNAME" download-program || fail download_failed "下载程序包失败"
+fetch_file "$(gurl "$FONTS_URL")" "$TMP/$FNAME" download-fonts || fail download_failed "下载字体包失败"
+fetch_file "$(gurl "${GITHUB}/releases/download/${TAG}/SHA256SUMS")" "$TMP/SHA256SUMS" download-sums || fail download_failed "下载 SHA256SUMS 失败"
 
 [ -s "$TMP/$PNAME" ] && [ -s "$TMP/$FNAME" ] && [ -s "$TMP/SHA256SUMS" ] || fail download_failed "下载的文件为空"
 
 # ---- 校验：只核对本次用到的两个包 ----
+set_stage verify
 PROG_SHA=$(awk -v n="$PNAME" '$2 == n { print $1 }' "$TMP/SHA256SUMS" | head -n 1)
 FONTS_SHA=$(awk -v n="$FNAME" '$2 == n { print $1 }' "$TMP/SHA256SUMS" | head -n 1)
 [ -n "$PROG_SHA" ] && [ -n "$FONTS_SHA" ] || fail checksum_failed "SHA256SUMS 里没有这两个包"
@@ -344,6 +388,7 @@ for f in "$TMP/$PNAME" "$TMP/$FNAME"; do
 	[ -z "$bad" ] || fail invalid_archive "归档里有不安全的成员路径：$(basename "$f")"
 done
 
+set_stage extract
 rm -rf "$STAGE"
 mkdir -p "$STAGE" || fail extract_failed "无法创建 staging 目录"
 tar -xzf "$TMP/$PNAME" -C "$STAGE" || fail extract_failed "解压程序包失败"
@@ -354,6 +399,7 @@ tar -xzf "$TMP/$FNAME" -C "$STAGE" || fail extract_failed "解压字体包失败
 rm -f "$TMP/$PNAME" "$TMP/$FNAME" "$TMP/SHA256SUMS" "$TMP/wanted.sums" 2>/dev/null
 
 # ---- 原子交换：同文件系统内的 rename；旧目录交换完成即删除（不保留副本）----
+set_stage swap
 if [ -d "$UI" ]; then
 	mv "$UI" "$OLD" || fail swap_failed "无法移开现有目录"
 	if ! mv "$STAGE" "$UI"; then

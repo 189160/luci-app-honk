@@ -18,7 +18,8 @@
 				"/etc/init.d/honk hot_reload": [ "exec" ],
 				"/etc/init.d/honk restart": [ "exec" ],
 				"/usr/libexec/honk-status": [ "exec" ],
-				"/usr/libexec/honk-native-api-probe": [ "exec" ]
+				"/usr/libexec/honk-native-api-probe": [ "exec" ],
+				"/tmp/honk-panel-progress.*": [ "read" ]
 			}
 		},
 		"write": {

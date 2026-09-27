@@ -30,6 +30,20 @@ var UPDATE = '/usr/libexec/honk-panel-update';
    而 rc.common 的 reload 默认就是 restart，为一个界面开关重启服务不可接受。 */
 var SOURCE_LS = 'honk-panel-source';
 
+/* 更新脚本写的进度文件（tmpfs，几十字节）：
+   .stage 是阶段名，.bytes 是 curl -# 的进度条输出（页面只取里面最后一个百分比）。 */
+var PROG_STAGE = '/tmp/honk-panel-progress.stage';
+var PROG_BYTES = '/tmp/honk-panel-progress.bytes';
+
+var STAGE_TEXT = {
+	'download-program': _('Downloading the panel package...'),
+	'download-fonts': _('Downloading the fonts...'),
+	'download-sums': _('Downloading the checksum list...'),
+	'verify': _('Verifying checksums...'),
+	'extract': _('Extracting...'),
+	'swap': _('Replacing the panel directory...')
+};
+
 /* 错误码 → 页面文案。脚本自己那份 message 是给命令行用的（中文），
    页面用这张表按当前语言显示，无法归类时才回落到 message。 */
 var ERRORS = {
@@ -109,6 +123,37 @@ function withTimeout(promise, ms, what) {
 			reject(e);
 		});
 	});
+}
+
+/* 从 curl 进度条里取最后一个百分比。
+   ⚠️ 刻意用字符串操作而不是正则：luci.mk 打包时用 jsmin 压缩，它不认识正则字面量，
+   正则里一旦出现 // 或 /* 就会被当成注释删掉（r29 就是这么炸的）。 */
+function lastPercent(blob) {
+	var s = String(blob == null ? '' : blob);
+	var i = s.lastIndexOf('%');
+
+	if (i < 0)
+		return null;
+
+	var j = i;
+
+	while (j > 0) {
+		var c = s.charAt(j - 1);
+
+		if ((c >= '0' && c <= '9') || c === '.')
+			j--;
+		else
+			break;
+	}
+
+	var v = s.slice(j, i);
+
+	if (!v)
+		return null;
+
+	var n = parseFloat(v);
+
+	return isNaN(n) ? null : Math.round(n);
 }
 
 /* 用「·」连接一串文本，分隔符单独着色 */
@@ -268,6 +313,8 @@ return view.extend({
 		var source = 'doona';
 		var busy = false;		/* 正在跑 update */
 		var checking = false;		/* 正在跑 check（防并发堆积） */
+		var progressTimer = null;
+		var progressBusy = false;
 		var firstLoad = null;		/* 首次探测的 promise，轮询等它落地再续 */
 
 		var stateNode = E('div', { 'style': S.state });
@@ -428,9 +475,50 @@ return view.extend({
 			return [ head, ' ', E('code', {}, '(%s)'.format(res.error || 'unknown')) ];
 		}
 
+		/* ---- 更新进度：读脚本写的两个小文件（1.5s 一拍，单飞防堆积）---- */
+
+		function renderProgress(stage, percent) {
+			var text = STAGE_TEXT[stage] || _('Starting...');
+
+			dom.content(resultNode, E('span', {
+				'style': 'color:var(--text-color-medium,var(--text-muted))'
+			}, percent == null ? text : text + ' ' + percent + '%'));
+		}
+
+		function startProgress() {
+			stopProgress();
+			renderProgress('', null);
+
+			progressTimer = window.setInterval(function() {
+				if (progressBusy)		/* 上一拍还没回来就跳过，别把 rpcd 的 exec 堆起来 */
+					return;
+
+				progressBusy = true;
+
+				Promise.all([
+					fs.read(PROG_STAGE).catch(function() { return null; }),
+					fs.read(PROG_BYTES).catch(function() { return null; })
+				]).then(function(r) {
+					progressBusy = false;
+					renderProgress(String(r[0] == null ? '' : r[0]).trim(), lastPercent(r[1]));
+				}, function() {
+					progressBusy = false;
+				});
+			}, 1500);
+		}
+
+		function stopProgress() {
+			if (progressTimer != null) {
+				window.clearInterval(progressTimer);
+				progressTimer = null;
+			}
+
+			progressBusy = false;
+		}
+
 		function runUpdate(extra) {
 			busy = true;
-			showResult(_('Downloading and verifying the release. This can take a while.'));
+			startProgress();
 			renderButtons();
 
 			/* 更新要下载 ~12 MB（脚本内每个 curl 有自己的 --max-time），这里只做兜底，
@@ -438,6 +526,14 @@ return view.extend({
 			return withTimeout(execJson(UPDATE, [ '--action', 'update' ].concat(extra)),
 				900000, _('Panel update')).then(function(res) {
 				busy = false;
+				stopProgress();
+
+				/* 脚本侧也有同样的闸门（已是最新且目录健康 ⇒ 不下载），这里负责显示出来 */
+				if (res.ok && res.skipped) {
+					showResult(_('Up to date (version %s); nothing to do.').format(res.to || ''));
+					checked = { latest: res.to, update_available: false };
+					return probe(false);
+				}
 
 				if (!res.ok) {
 					dom.content(resultNode, E('span', {
@@ -452,6 +548,7 @@ return view.extend({
 				return probe(true);
 			}).catch(function(err) {
 				busy = false;
+				stopProgress();
 				showResult(err && err.message ? err.message : String(err), true);
 				renderButtons();
 			});
@@ -483,6 +580,14 @@ return view.extend({
 
 			var panel = (data || {}).panel || {};
 			var dir = panel.dir || '';
+
+			/* 已是最新且面板目录健康 ⇒ 连那 12 MB 都不下（脚本侧同样会拦，这里是即时反馈）。
+			   目录缺 index.html 时不走这条 —— 那正是要用官方 release 修的场景。 */
+			if (panel.index === true && checked && checked.ok === true && checked.update_available === false) {
+				showResult(_('Up to date (version %s); nothing to do.')
+					.format(checked.latest || panel.version || ''));
+				return null;
+			}
 
 			if (source === 'custom')
 				return confirm(_('Overwrite the panel directory?'),

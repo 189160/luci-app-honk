@@ -159,9 +159,6 @@ msgstr "自定义"
 msgid "Doona (default)"
 msgstr "Doona（默认）"
 
-msgid "Downloading and verifying the release. This can take a while."
-msgstr "正在下载并校验 release，可能需要一段时间。"
-
 msgid "Extracting the archive failed"
 msgstr "解压失败"
 
@@ -335,3 +332,27 @@ msgstr "版本检查"
 
 msgid "Panel update"
 msgstr "面板更新"
+
+msgid "Downloading the panel package..."
+msgstr "正在下载面板程序包..."
+
+msgid "Downloading the fonts..."
+msgstr "正在下载字体包..."
+
+msgid "Downloading the checksum list..."
+msgstr "正在下载校验清单..."
+
+msgid "Verifying checksums..."
+msgstr "正在校验..."
+
+msgid "Extracting..."
+msgstr "正在解压..."
+
+msgid "Replacing the panel directory..."
+msgstr "正在替换面板目录..."
+
+msgid "Starting..."
+msgstr "开始..."
+
+msgid "Up to date (version %s); nothing to do."
+msgstr "已是最新（版本 %s），无需更新。"
