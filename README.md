@@ -18,6 +18,8 @@ OpenWrt 上 [honk](https://github.com/daeuniverse/honk)（eBPF 透明代理引�
 - **不依赖 `vmlinux-btf`**：移除条件依赖与 choice，固定使用内核自带 BTF；
 - **geo 数据**：依赖 `v2ray-geoip` / `v2ray-geosite`，安装脚本在 `/usr/share/honk` 自动建立软链；
 - **启动脚本**：新增 `/var/log/honk/honk.log` 三代轮转，不再劫持 `/tmp/resolv.conf`（上游从不创建日志文件）。
+- **启动脚本的权限收紧**：`/etc/honk` 收紧为 750/640，`state` 子树单独 0700/0600（该目录不可被同组访问，否则 honk 启动报 `state database path is unsafe`）。
+- **启动脚本不预建内核资源**：`dae0` / `dae0peer` / `/run/netns/daens` 由 honk 自建自清。
 
 ## 安装
 
@@ -43,6 +45,7 @@ uci set honk.config.enabled=1 && uci commit honk
 ### 前提与平台
 
 - **BTF**：honk 是 eBPF CO-RE 程序，内核需开启 `CONFIG_DEBUG_INFO_BTF`（官方 24.10+ 的 x86_64 / armsr 默认开启）。未开启时 honk 可安装但无法启动；CI 有 Assert 步骤保证产物不含 `vmlinux-btf` 依赖。
+- **cgroup v2 与 bpffs**：`pname(...)` 与 map pin 各自依赖，固件启动时已挂载，无需处理；缺失时 honk 日志出现 `cgroup2 not available` 或 `pin '<名称>'`。
 - **架构**：上游只提供 x86_64 与 aarch64 的预编译静态二进制，包以 `@(x86_64||aarch64)` 限制架构。
 
 ## LuCI 界面

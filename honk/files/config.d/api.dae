@@ -19,6 +19,10 @@ experimental {
         secret: ''                     # 填一个 ≥8 字节的随机串（短于 8 字节不会被脱敏）
         ui: ''                         # 内嵌 doona 填 'embedded'（需二进制带 native-ui feature）
         # config_write: true           # 允许 doona 面板改写**其它**配置文件（要求 secret 非空）
+        # —— 以下两个是「接受但无效」的遗留字段，写与不写完全一样 ——
+        # config_content: true         # 读配置内容本来就不需要开关：任何通过认证的请求都可读，
+        #                              #   只有监听凭据值会被遮蔽。此字段解析后即被丢弃。
+        # writable_includes: 'x.dae'   # 既不授权也不限制；能改哪些源只看 config_write + 逐源可写性
         # allowed_hosts: 'panel.example'
         # allow_origins: 'https://panel.example'
         # record_logs: true            # record_flows / record_traffic / record_memory / record_dns_log 同理
