@@ -243,9 +243,6 @@ msgstr "面板目录里没有可读的 index.html"
 msgid "The panel directory was not installed from this page"
 msgstr "面板目录不是本页安装的"
 
-msgid "The panel does not answer; native_api changes need a service restart"
-msgstr "面板无响应；native_api 的改动需要重启服务"
-
 msgid "The panel files are maintained elsewhere. Updating replaces the contents of the directory with the official release after a confirmation. Set ui on the API Settings page to the absolute path of the directory, with a readable index.html in it and the fonts in a fonts subdirectory next to it."
 msgstr "面板文件由其他地方维护。更新会在确认后用官方 release 覆盖该目录的内容。在 API 设置里把 ui 设为面板目录的绝对路径，目录内需有可读的 index.html，字体放在同级的 fonts 子目录。"
 
@@ -291,9 +288,6 @@ msgstr "版本 %s"
 msgid "Version unknown"
 msgstr "版本未知"
 
-msgid "allow_origins has several entries, so listen is used"
-msgstr "allow_origins 有多个条目，按 listen 推导"
-
 msgid "from allow_origins"
 msgstr "来自 allow_origins"
 
@@ -306,9 +300,6 @@ msgstr "按 listen 推导"
 msgid "from listen (loopback, so it only opens on the router itself)"
 msgstr "按 listen 推导（回环地址，只能在路由器本机打开）"
 
-msgid "from listen (wildcard, so the host name of this page is used)"
-msgstr "按 listen 推导（通配监听，取当前访问的主机名）"
-
 msgid "ui is not an absolute path"
 msgstr "ui 不是绝对路径"
 
@@ -317,3 +308,30 @@ msgstr "ui 为 embedded，当前二进制不含内嵌面板"
 
 msgid "unset"
 msgstr "未设置"
+
+msgid "matches how you opened this page"
+msgstr "与当前访问方式一致"
+
+msgid "LAN address (from listen)"
+msgstr "局域网地址（来自 listen）"
+
+msgid "external: %s"
+msgstr "对外：%s"
+
+msgid "The honk service is not running"
+msgstr "honk 服务未在运行"
+
+msgid "The local probe got no answer"
+msgstr "本机探测无响应"
+
+msgid "%s timed out after %s seconds"
+msgstr "%s 超过 %s 秒仍未返回"
+
+msgid "Status probe"
+msgstr "状态探测"
+
+msgid "Version check"
+msgstr "版本检查"
+
+msgid "Panel update"
+msgstr "面板更新"

@@ -26,6 +26,14 @@ GITHUB=https://github.com/$GH_PATH
 LOCK_DIR=/var/lock/honk-panel.lock
 MIN_KB=24576          # 下载 9.6 MB + 解压 11.3 MB，留余量
 
+# 取元数据（版本号 / 资产清单）的网络参数。
+# 必须短：`--action check` 是页面刷新时调的，机器上 github.com 慢或被拦时，
+# 原来的单次 20~30s × 4 通道 × 2 URL 能让一次 check 拖上百秒，
+# 连带 rpcd 的 exec 一直占着（症状：LuCI 其它页签也卡、状态卡片停在"收集数据…"）。
+META_CONNECT=4
+META_MAX=10
+META_BUDGET=25        # 本轮取版本的**总**预算（秒），超了就报 tag_failed，不硬撑
+
 ACTION=""
 OVERWRITE=0
 
@@ -94,9 +102,9 @@ trap 'cleanup' EXIT HUP INT TERM
 
 fetch_stdout() {
 	if command -v curl >/dev/null 2>&1; then
-		curl -fsSL --max-time 30 "$1" 2>/dev/null
+		curl -fsSL --connect-timeout "$META_CONNECT" --max-time "$META_MAX" "$1" 2>/dev/null
 	elif command -v uclient-fetch >/dev/null 2>&1; then
-		uclient-fetch -q "$1" 2>/dev/null
+		uclient-fetch -q -T "$META_MAX" "$1" 2>/dev/null
 	fi
 }
 
@@ -112,8 +120,15 @@ fetch_file() {	# fetch_file <url> <dest>；0 成功 / 1 失败 / 2 无可用下�
 
 head_location() {	# 只有 curl 能便宜地取响应头
 	command -v curl >/dev/null 2>&1 || return 0
-	curl -fsSI --max-time 20 "$1" 2>/dev/null \
+	curl -fsSI --connect-timeout "$META_CONNECT" --max-time "$META_MAX" "$1" 2>/dev/null \
 		| tr -d '\r' | sed -n 's#^[Ll]ocation: .*releases/tag/##p' | head -n 1
+}
+
+# 总预算：每个通道开跑前先看有没有超时，避免慢网络下把这一轮拖成几分钟
+META_T0=$(date +%s 2>/dev/null || echo 0)
+meta_alive() {
+	[ "${META_T0:-0}" -eq 0 ] && return 0
+	[ $(( $(date +%s) - META_T0 )) -lt "$META_BUDGET" ]
 }
 
 # 取元数据的候选 URL：先直连、再走加速站。
@@ -196,6 +211,7 @@ extract_api() {
 
 try_head() {	# /releases/latest 只在最新发布不是 prerelease 时给出 tag
 	for u in $(meta_urls "/releases/latest"); do
+		meta_alive || return 0
 		t=$(head_location "$u")
 		[ -n "$t" ] && { printf '%s' "$t"; return 0; }
 	done
@@ -203,6 +219,7 @@ try_head() {	# /releases/latest 只在最新发布不是 prerelease 时给出 ta
 }
 try_atom() {
 	for u in $(meta_urls "/releases.atom"); do
+		meta_alive || return 0
 		t=$(extract_atom "$u")
 		[ -n "$t" ] && { printf '%s' "$t"; return 0; }
 	done
@@ -210,6 +227,7 @@ try_atom() {
 }
 try_page() {
 	for u in $(meta_urls "/releases"); do
+		meta_alive || return 0
 		t=$(extract_page "$u")
 		[ -n "$t" ] && { printf '%s' "$t"; return 0; }
 	done
@@ -217,6 +235,7 @@ try_page() {
 }
 # api.github.com 是另一台主机（加速站不代理它），匿名调用常年 403，只作最后兜底
 try_api() {
+	meta_alive || return 0
 	extract_api "https://api.github.com/repos/${GH_PATH}/releases?per_page=1"
 	return 0
 }
@@ -225,7 +244,7 @@ TAG=$(try_head)
 [ -n "$TAG" ] || TAG=$(try_atom)
 [ -n "$TAG" ] || TAG=$(try_page)
 [ -n "$TAG" ] || TAG=$(try_api)
-[ -n "$TAG" ] || fail tag_failed "无法取得最新 release 版本号（需要能访问 github.com；加速站只支持 releases/latest）"
+[ -n "$TAG" ] || fail tag_failed "无法在 ${META_BUDGET}s 内取得最新 release 版本号（访问 github.com 过慢或被拦；加速站只支持 releases/latest）"
 case "$TAG" in
 	*[!A-Za-z0-9._-]*) fail tag_failed "tag 含非法字符：$TAG" ;;
 esac

@@ -93,6 +93,24 @@ function execJson(cmd, args) {
 	});
 }
 
+/* rpcd 侧的 exec 没有超时：一旦某个调用不返回，页面会永远吊在那里
+   （症状就是"一直显示收集数据…"）。所以每个 exec 都套一层客户端超时。 */
+function withTimeout(promise, ms, what) {
+	return new Promise(function(resolve, reject) {
+		var t = window.setTimeout(function() {
+			reject(new Error(_('%s timed out after %s seconds').format(what, Math.round(ms / 1000))));
+		}, ms);
+
+		promise.then(function(v) {
+			window.clearTimeout(t);
+			resolve(v);
+		}, function(e) {
+			window.clearTimeout(t);
+			reject(e);
+		});
+	});
+}
+
 /* 用「·」连接一串文本，分隔符单独着色 */
 function joinParts(list) {
 	var out = [];
@@ -110,52 +128,79 @@ function joinParts(list) {
 	return out;
 }
 
-/* 面板地址：allow_origins 唯一项 → allowed_hosts 唯一项 → listen。
-   面板自身的路径固定是 /ui/（honk 的挂载点）。 */
+/* 当前访问 LuCI 的 host[:port]：面板地址要跟它对齐 —— 你在 IP 上访问就给 IP，
+   在域名上访问才给域名（用户明确要求：IP 访问时不该显示域名）。 */
+function currentHost() {
+	return String(window.location.hostname || '') +
+		(window.location.port ? ':' + window.location.port : '');
+}
+
+/* 'https://dae.example.com' / 'dae.example.com:9527' → 'dae.example.com[:port]' */
+function originHost(s) {
+	var m = /^[a-z]+:\/\/(.+)$/i.exec(String(s || '').trim().replace(/\/+$/, ''));
+
+	return m ? m[1] : String(s || '').trim().replace(/\/+$/, '');
+}
+
+/* 只有带 scheme 的条目才能直接当 URL 用 */
+function originUrl(s) {
+	var v = String(s || '').trim().replace(/\/+$/, '');
+
+	return /^[a-z]+:\/\//i.test(v) ? v + '/ui/' : null;
+}
+
+/* 面板地址。优先级 = 「你此刻怎么访问 LuCI」：
+   ① 当前 host 就在 allow_origins / allowed_hosts 里 → 用那一条（这条路你正在用）
+   ② listen 是通配 → 当前访问的主机名 + listen 的端口（IP 访问得 IP）
+   ③ listen 是具体地址 → 用它（loopback 会标注只能本机打开）
+   ④ 都没有 → 退回 allow_origins / allowed_hosts
+   另外：① 未命中而 allow_origins 有唯一项时，把它作为「对外」附注给出。 */
 function panelUrl(cfg) {
 	var l = splitListen(cfg.listen);
 	var origins = cfg.allow_origins || [];
 	var hosts = cfg.allowed_hosts || [];
+	var cur = currentHost();
+	var ext = (origins.length === 1) ? originUrl(origins[0]) : null;
 
-	if (origins.length === 1) {
-		var o = String(origins[0]).replace(/\/+$/, '');
+	if (ext && originHost(origins[0]) === cur)
+		return { url: ext, src: _('matches how you opened this page') };
 
-		if (/^https?:\/\/[^\/]+$/.test(o))
-			return { url: o + '/ui/', src: _('from allow_origins') };
-	}
+	if (hosts.length === 1 && String(hosts[0]) === cur)
+		return {
+			url: window.location.protocol + '//' + cur + '/ui/',
+			src: _('matches how you opened this page')
+		};
 
-	if (hosts.length === 1) {
-		var h = String(hosts[0]);
+	if (l && isWildcard(l.host))
+		return {
+			url: 'http://%s:%s/ui/'.format(window.location.hostname || '127.0.0.1', l.port),
+			src: _('LAN address (from listen)'),
+			alt: ext
+		};
 
-		if (/^[A-Za-z0-9.\-]+$/.test(h) && l)		/* 裸主机名：端口借 listen */
-			h += ':' + l.port;
+	if (l)
+		return {
+			url: 'http://%s:%s/ui/'.format(l.host, l.port),
+			src: isLoopback(l.host)
+				? _('from listen (loopback, so it only opens on the router itself)')
+				: _('from listen')
+		};
 
-		if (/^[A-Za-z0-9.\-\[\]:]+$/.test(h))
-			return {
-				url: window.location.protocol + '//' + h + '/ui/',
-				src: _('from allowed_hosts (protocol taken from this page)')
-			};
-	}
+	if (ext)
+		return { url: ext, src: _('from allow_origins') };
 
-	if (!l)
-		return null;
+	if (hosts.length === 1)
+		return {
+			url: window.location.protocol + '//' + hosts[0] + '/ui/',
+			src: _('from allowed_hosts (protocol taken from this page)')
+		};
 
-	var host = isWildcard(l.host) ? (window.location.hostname || '127.0.0.1') : l.host;
-	var src;
-
-	if (origins.length > 1)
-		src = _('allow_origins has several entries, so listen is used');
-	else if (isLoopback(l.host))
-		src = _('from listen (loopback, so it only opens on the router itself)');
-	else if (isWildcard(l.host))
-		src = _('from listen (wildcard, so the host name of this page is used)');
-	else
-		src = _('from listen');
-
-	return { url: 'http://%s:%s/ui/'.format(host, l.port), src: src };
+	return null;
 }
 
-/* 面板没在提供服务的第一个原因；都正常时返回 null */
+/* 面板没在提供服务的第一个原因；都正常时返回 null。
+   ⚠️ 这里**不看**本机 HTTP 探测结果：探测失败可能是 allowed_hosts 的 Host 校验造成的误报
+   （busybox 的 wget/uclient-fetch 改不了 Host 头），而面板到底能不能打开，点「打开面板」最准。 */
 function issue(data) {
 	var cfg = (data && data.configured) || {};
 	var panel = (data && data.panel) || {};
@@ -184,8 +229,8 @@ function issue(data) {
 	if (!panel.index)
 		return { text: _('The panel directory holds no readable index.html'), page: 'api' };
 
-	if (((data || {}).probe || {}).reachable !== true)
-		return { text: _('The panel does not answer; native_api changes need a service restart') };
+	if (((data || {}).service || {}).running !== true)
+		return { text: _('The honk service is not running'), page: 'global' };
 
 	return null;
 }
@@ -216,7 +261,8 @@ return view.extend({
 		var data = null;
 		var checked = null;		/* check 结果：null=未取到；失败时 {error:...} */
 		var source = 'doona';
-		var busy = false;
+		var busy = false;		/* 正在跑 update */
+		var checking = false;		/* 正在跑 check（防并发堆积） */
 		var firstLoad = null;		/* 首次探测的 promise，轮询等它落地再续 */
 
 		var stateNode = E('div', { 'style': S.state });
@@ -278,6 +324,16 @@ return view.extend({
 			var name = panel.title ? cap(panel.title) : _('Panel');
 			var running = !!data && !bad;
 
+			/* 探测还没回来：给灰点 + 收集中，别让状态行/事实行留白 */
+			if (!data) {
+				dom.content(stateNode, [
+					E('span', { 'style': '%s;background:#b0b0b0'.format(S.dot) }),
+					E('strong', {}, _('Collecting data...'))
+				]);
+				dom.content(factsNode, joinParts([ _('Collecting data...') ]));
+				return;
+			}
+
 			dom.content(stateNode, [
 				E('span', {
 					'style': '%s;background:%s'.format(S.dot, running ? '#46a546' : '#cc3333')
@@ -290,9 +346,7 @@ return view.extend({
 				panel.version ? _('Version %s').format(panel.version) : _('Version unknown')
 			];
 
-			if (!data)
-				facts.push(_('Collecting data...'));
-			else if (bad)
+			if (bad)
 				facts.push(bad.text);
 			else if (source === 'custom')
 				facts.push(_('Not updated from this page'));
@@ -308,15 +362,25 @@ return view.extend({
 			facts.push(((data || {}).configured || {}).secret_configured === true
 				? _('Access key configured') : _('No access key configured'));
 
+			/* 运行中但本机探测没回应：多半是 allowed_hosts 的 Host 校验（探测脚本改不了 Host 头），
+			   如实提一句，别让它伪装成「未运行」 */
+			if (data && !bad && ((data.probe || {}).reachable !== true))
+				facts.push(_('The local probe got no answer'));
+
 			dom.content(factsNode, joinParts(facts));
 		}
 
 		function renderUrl() {
 			var cfg = (data || {}).configured || {};
 			var u = data ? panelUrl(cfg) : null;
+			var note = u ? u.src : '';
 
 			dom.content(urlNode, u ? u.url : '\u2014');
-			dom.content(urlSrcNode, u ? u.src : '');
+			dom.content(urlSrcNode, u
+				? [ note,
+				    u.alt ? E('span', { 'style': S.sep }, '\u00b7') : null,
+				    u.alt ? _('external: %s').format(u.alt) : null ].filter(function(v) { return v != null; })
+				: '');
 		}
 
 		function renderHint() {
@@ -364,7 +428,10 @@ return view.extend({
 			showResult(_('Downloading and verifying the release. This can take a while.'));
 			renderButtons();
 
-			return execJson(UPDATE, [ '--action', 'update' ].concat(extra)).then(function(res) {
+			/* 更新要下载 ~12 MB（脚本内每个 curl 有自己的 --max-time），这里只做兜底，
+			   避免真卡住时按钮永远停在「更新中…」 */
+			return withTimeout(execJson(UPDATE, [ '--action', 'update' ].concat(extra)),
+				900000, _('Panel update')).then(function(res) {
 				busy = false;
 
 				if (!res.ok) {
@@ -429,26 +496,45 @@ return view.extend({
 			return runUpdate([]);
 		}
 
-		/* 探测；withCheck 为真时再取一次最新版本号（要直连 github.com，失败不影响状态显示） */
+		/* 探测；withCheck 为真时再取一次最新版本号（要访问 github.com，失败不影响状态显示） */
 		function probe(withCheck) {
-			return execJson(PROBE).then(function(res) {
+			return withTimeout(execJson(PROBE), 20000, _('Status probe')).then(function(res) {
 				data = res;
 				renderAll();
 
 				if (!withCheck)
 					return null;
 
-				return execJson(UPDATE, [ '--action', 'check' ]).then(function(c) {
-					checked = c.ok ? c : { error: c.error || 'check_failed' };
-				}).catch(function() {
-					checked = { error: 'unreachable' };
-				}).then(renderState);
+				return runCheck();
 			}).catch(function(err) {
 				data = null;
 				renderAll();
 				showResult(err && err.message ? err.message : String(err), true);
 				return null;
 			});
+		}
+
+		/* 版本检查要访问外网，可能很慢；同一时刻只允许一个在飞，
+		   否则连点「刷新状态」会堆起一串 curl，把 rpcd 的 exec 拖住（连带其它页签一起卡）。 */
+		function runCheck() {
+			if (checking)
+				return Promise.resolve(null);
+
+			checking = true;
+			renderState();
+
+			return withTimeout(execJson(UPDATE, [ '--action', 'check' ]), 60000, _('Version check'))
+				.then(function(c) {
+					checked = c.ok ? c : { error: c.error || 'check_failed' };
+				})
+				.catch(function() {
+					checked = { error: 'unreachable' };
+				})
+				.then(function() {
+					checking = false;
+					renderState();
+					return null;
+				});
 		}
 
 		function handleRefresh() {
@@ -458,7 +544,11 @@ return view.extend({
 			return probe(true);
 		}
 
-		/* 首次：探测先出画面，乐观地按空配置渲染一帧；随后按目录名定来源并取版本号 */
+		/* 先按「什么都没拿到」渲染一帧（灰点 + 收集数据…）+ 占位地址，
+		   再让探测回来覆盖：否则首屏会是一排空标签 */
+		renderAll();
+
+		/* 首次：探测先出画面，随后按目录名定来源并取版本号 */
 		firstLoad = probe(false).then(function() {
 			source = loadSource(data);
 			renderAll();

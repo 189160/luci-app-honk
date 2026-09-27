@@ -8,9 +8,13 @@
 #   面板地址与目录内容也只能在设备上读。
 #
 # 两点注意：
-#   1) 面板地址的推导（allow_origins → allowed_hosts → listen）由 JS 做，本脚本把原始字段都交出去；
+#   1) 面板地址的推导在 JS 里做，本脚本把原始字段都交出去（allow_origins / allowed_hosts / listen）；
 #   2) 面板目录的推导只处理绝对路径 —— 相对路径的解析顺序含 honk 的 data_dir 与 CWD，
 #      页面据此提示改写为绝对路径（更新脚本同样会拒绝相对路径）。
+#
+# probe.reachable 是**本机**对 127.0.0.1:<port>/ui/ 的一次 HTTP 尝试，只作附注：
+# 设了 allowed_hosts 时它会被 Host 校验挡住（busybox 的 wget/uclient-fetch 改不了 Host 头），
+# 所以页面不拿它判"运行中/未运行"，而是看 service.running（进程）+ 配置 + 面板目录。
 #
 # 只用 shell + awk/sed + 一个 HTTP 客户端，不依赖 PATH 上的其它命令。
 
@@ -114,6 +118,19 @@ if [ "$enabled" = "true" ] && [ -n "$ui" ] && [ "$ui" != "embedded" ]; then
 	[ -n "$(fetch "$url")" ] && reachable=true
 fi
 
+# ---- 进程是否在跑：与 honk-status 同一套判据（读 /proc 的 comm），但这里自带一份，
+#      免得探测脚本依赖隔壁脚本；root 下 /proc/*/comm 一律可读 ----
+running=false
+for d in /proc/[0-9]*; do
+	[ -r "$d/comm" ] || continue
+	comm=""
+	read -r comm < "$d/comm" 2>/dev/null
+	if [ "$comm" = "honk-core" ]; then
+		running=true
+		break
+	fi
+done
+
 # ---- 面板目录：只处理绝对路径（相对路径交由页面提示改写）----
 dir=""
 absolute=false
@@ -155,6 +172,8 @@ fi
 
 printf '{"configured":{"present":%s,"enabled":%s,"block_present":%s,"listen":"%s","ui":"%s","secret_configured":%s,"allow_origins":%s,"allowed_hosts":%s},' \
 	"$present" "$enabled" "$block_present" "$(esc "$listen")" "$(esc "$ui")" "$secret_set" "$(list_json allow_origins)" "$(list_json allowed_hosts)"
+
+printf '"service":{"running":%s},' "$running"
 
 printf '"probe":{"reachable":%s},' "$reachable"
 
