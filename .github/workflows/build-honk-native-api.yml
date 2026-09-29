@@ -1,0 +1,182 @@
+# 临时构建 workflow：从上游 fork 的 feat/native-api 分支编译 honk-core（只上传 artifact，不发 Release）。
+# 用途：本机是 Windows 且 WSL 被禁用，无法编译 eBPF，借托管 runner 复刻上游 release.yml 的构建步骤。
+# 只构建 musl 目标；默认不含 native-ui（面板由 honk 以 `ui: '<目录>'` 托管，便于独立更新 doona）
+# 也不含 clash-api：看板用 doona，不需要 Clash 兼容 API。
+# 用完可直接删除本文件。
+
+name: Build honk (native-api)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Glassyiris/honk 的 ref（分支 / tag / commit sha）'
+        required: true
+        default: 'feat/native-api'
+      features:
+        description: 'cargo features（逗号分隔）。默认不含 native-ui：面板请用 ui: <目录>，写 ui: embedded 会启动失败'
+        required: true
+        default: 'ebpf,rprx,native-api'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}${{ matrix.suffix }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ARTIFACT_NAME: honk-core-nativeapi-${{ matrix.target }}${{ matrix.suffix }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # mimalloc（默认，QUIC 更快）与 stock malloc（小网关 RSS 高水位更低）各一份
+          - target: aarch64-unknown-linux-musl
+            suffix: ""
+          - target: aarch64-unknown-linux-musl
+            suffix: "-stock"
+          - target: x86_64-unknown-linux-musl
+            suffix: ""
+          - target: x86_64-unknown-linux-musl
+            suffix: "-stock"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Glassyiris/honk
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Read Rust toolchains
+        id: toolchain
+        run: |
+          set -euo pipefail
+          echo "stable=$(grep -oP '^channel\s*=\s*"\K[^"]+' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+          echo "ebpf=$(grep -oP '^channel\s*=\s*"\K[^"]+' crates/honk-ebpf/rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust stable (with target)
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: ${{ steps.toolchain.outputs.stable }}
+          target: ${{ matrix.target }}
+
+      - name: Install Rust nightly (for the eBPF object)
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: ${{ steps.toolchain.outputs.ebpf }}
+          components: rust-src, llvm-tools
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ${{ matrix.target }}${{ matrix.suffix }}
+          cache-on-failure: true
+          workspaces: |
+            . -> target
+            crates/honk-ebpf -> target
+
+      - name: Install system dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libbpf-dev pkg-config cmake libclang-dev zstd
+
+      - name: Install pinned bpf-linker
+        run: |
+          set -euo pipefail
+          source .github/ci/pins.env
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/bpf-linker.tar.zst" \
+            "https://github.com/aya-rs/bpf-linker/releases/download/v$BPF_LINKER_VERSION/bpf-linker-x86_64-unknown-linux-musl.tar.zst"
+          echo "$BPF_LINKER_SHA256  $RUNNER_TEMP/bpf-linker.tar.zst" | sha256sum -c -
+          zstd -dc "$RUNNER_TEMP/bpf-linker.tar.zst" | tar -xf - -C "$CARGO_HOME/bin"
+          bpf-linker --version
+
+      # eBPF 对象与目标架构无关，在宿主上编一次，交叉构建会直接取用（build.rs 能找到就用）
+      - name: Build eBPF object
+        run: |
+          set -euo pipefail
+          cd crates/honk-ebpf
+          cargo build --release -Zbuild-std=core --target bpfel-unknown-none
+
+      # aya 拒绝没有 BTF 的对象（"no BTF parsed for object"）—— 在这里就把关，
+      # 而不是等到网关上运行时才炸
+      - name: Verify eBPF object has BTF
+        run: readelf -S crates/honk-ebpf/target/bpfel-unknown-none/release/honk-ebpf | grep -q '\.BTF'
+
+      # boring-sys（BoringSSL，C++）需要 clang 风格的目标工具链：交叉编译时 CMake 会往
+      # ASM 规则里注入 clang 风格的 --target，真 GCC 不认，zig 又不认 Rust 的三元组写法 ——
+      # ci/zigcc / ci/zigcxx 负责剥掉这些 flag 并改锚到 $ZIGCC_TARGET 的 zig 风格目标。
+      - name: Install zig (cross targets)
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: 0.14.1
+
+      # 分配器变体必须暴露相同的协议与 API 能力
+      - name: Resolve feature set
+        shell: bash
+        run: |
+          set -euo pipefail
+          features="${{ inputs.features }}"
+          if [[ "${{ matrix.suffix }}" != "-stock" ]]; then
+            features+=,mimalloc
+          fi
+          echo "FEATURES=$features" >> "$GITHUB_ENV"
+          echo "本次 features: $features"
+
+          # 【上游 bug 的临时绕过 —— 修好后删掉本步骤】
+          # state.rs 的 reset_corrupt() 用了 renameat2 / RenameFlags，而这两个 item 在 nix 里被
+          # target_env = "gnu" 门控（musl 目标下不存在）⇒ 编译报 E0425 / E0433；上游 ci.yml 的
+          # musl lane 不含 native-api，覆盖不到这条路径。降级为 renameat 在此处语义基本等价
+          # （CORRUPT 已先经 fstatat 检查并 return），只失去对 honk.db.corrupt-wal 的保护。
+      - name: Patch upstream musl build break (temporary)
+        shell: bash
+        run: |
+          set -euo pipefail
+          f=crates/honk-core/src/state.rs
+          if grep -q 'nix::fcntl::renameat2' "$f"; then
+            sed -i 's/nix::fcntl::renameat2(/nix::fcntl::renameat(/' "$f"
+            sed -i '/nix::fcntl::RenameFlags::RENAME_NOREPLACE,/d' "$f"
+            echo "已打补丁：renameat2 -> renameat"
+            grep -n 'renameat' "$f" || true
+          else
+            echo "未找到 renameat2 —— 上游可能已修复，跳过补丁"
+          fi
+
+      - name: Build honk-core (cross via zig wrappers)
+        shell: bash
+        run: |
+          set -euo pipefail
+          T="${{ matrix.target }}"
+          export ZIGCC_TARGET="${T/-unknown/}"
+          # cc crate 要小写的 CC_<target_with_underscores>；cargo 要大写的 CARGO_TARGET_<TARGET>
+          L=$(printf '%s' "$T" | tr '-' '_')
+          U=$(printf '%s' "$T" | tr 'a-z-' 'A-Z_')
+          eval "export CC_${L}=\$PWD/ci/zigcc"
+          eval "export CXX_${L}=\$PWD/ci/zigcxx"
+          eval "export CARGO_TARGET_${U}_LINKER=\$PWD/ci/zigcc"
+          # musl：让 zig 提供 CRT（Rust 自带的 rcrt1.o 与 zig 的 crt1.o 都定义 _start）
+          if [[ "$T" == *-musl ]]; then
+            eval "export CARGO_TARGET_${U}_RUSTFLAGS='-C link-self-contained=no'"
+          fi
+          # boring-sys 在构建期用 bindgen 生成绑定 —— 指向 zig 的目标头文件，而不是宿主的
+          BINDGEN_EXTRA_CLANG_ARGS="$(ci/zig-bindgen-env "$ZIGCC_TARGET")"
+          export BINDGEN_EXTRA_CLANG_ARGS
+          cargo build --release -p honk-core --no-default-features --features "$FEATURES" --target "$T"
+
+      - name: Package artifact
+        run: |
+          set -euo pipefail
+          name="$ARTIFACT_NAME"
+          mkdir -p "dist/$name"
+          cp "target/${{ matrix.target }}/release/honk-core" "dist/$name/"
+          cp LICENSE README.md "dist/$name/"
+          tar -czf "$name.tar.gz" -C dist "$name"
+          ls -lh "$name.tar.gz"
+          sha256sum "$name.tar.gz"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: honk-core-nativeapi-${{ matrix.target }}${{ matrix.suffix }}
+          path: ${{ env.ARTIFACT_NAME }}.tar.gz
+          retention-days: 7

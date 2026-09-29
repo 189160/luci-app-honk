@@ -1,0 +1,305 @@
+name: Build apk
+
+on:
+  workflow_dispatch:
+    inputs:
+      sdk:
+        description: 'OpenWrt SDK 分支（25.x 起产出 apk）'
+        required: false
+        default: openwrt-25.12
+      packages:
+        description: '要编译的包，空格分隔'
+        required: false
+        default: 'honk luci-app-honk'
+      force:
+        description: '忽略变更检测，强制编译并发布'
+        required: false
+        default: false
+        type: boolean
+  push:
+    branches:
+      - main
+  # PR 只做“能否编译/断言是否通过”的校验，release job 由 event 门控跳过（见 release）
+  pull_request:
+    branches:
+      - main
+  schedule:
+    - cron: '17 3 * * *'
+
+# 同一 ref 只允许一个构建/发布流程，避免并发 run 同时进出 release job 互删 Release 附件
+concurrency:
+  group: build-apk-honk-${{ github.ref }}
+  cancel-in-progress: true
+
+# 默认收敛到最小权限，需要写权限的 job 各自单独提升（见 build / release）
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Prepare version
+    runs-on: ubuntu-latest
+    # 用默认 GITHUB_TOKEN 做的 push 不会触发其它 workflow（GitHub 递归保护），
+    # 因此 update-honk.yml 里的 `gh workflow run` 是必需手段；这里的门控只用于
+    # 万一将来改用 PAT 推送时避免“push + workflow_dispatch”双跑。
+    if: github.event_name != 'push' || github.actor != 'github-actions[bot]'
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+      release_name: ${{ steps.meta.outputs.release_name }}
+      sdk: ${{ steps.meta.outputs.sdk }}
+      packages: ${{ steps.meta.outputs.packages }}
+      luci_version: ${{ steps.meta.outputs.luci_version }}
+      should_build: ${{ steps.guard.outputs.should_build }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Generate version metadata
+        id: meta
+        shell: bash
+        run: |
+          pkg_version=$(grep '^PKG_VERSION:=' honk/Makefile | head -n 1 | cut -d= -f2)
+          pkg_release=$(grep '^PKG_RELEASE:=' honk/Makefile | head -n 1 | cut -d= -f2)
+          sdk="${{ inputs.sdk || 'openwrt-25.12' }}"
+          packages="${{ inputs.packages || 'honk luci-app-honk' }}"
+
+          version="${pkg_version}-r${pkg_release}"
+          echo "version=${version}"                >> "$GITHUB_OUTPUT"
+          rel_date=$(date -u +%Y.%m.%d)
+          echo "release_tag=honk_${rel_date}"       >> "$GITHUB_OUTPUT"
+          echo "release_name=honk_${rel_date}"      >> "$GITHUB_OUTPUT"
+          echo "sdk=${sdk}"                        >> "$GITHUB_OUTPUT"
+          echo "packages=${packages}"              >> "$GITHUB_OUTPUT"
+          luci_version="$(grep '^PKG_VERSION:=' luci-app-honk/Makefile | head -n 1 | cut -d= -f2)-r$(grep '^PKG_RELEASE:=' luci-app-honk/Makefile | head -n 1 | cut -d= -f2)"
+          echo "luci_version=${luci_version}"      >> "$GITHUB_OUTPUT"
+
+          echo "Version: ${version} / SDK: ${sdk} / Packages: ${packages}"
+
+      - name: Change guard
+        id: guard
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ver="${{ steps.meta.outputs.version }}"
+          luci="${{ steps.meta.outputs.luci_version }}"
+          if [ "${{ inputs.force }}" = "true" ]; then
+            echo "手动强制构建（force=true）"
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          latest_tag=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName --jq '.[0].tagName // ""' || echo "")
+          last=""
+          if [ -n "$latest_tag" ]; then
+            last=$(gh release view "$latest_tag" --repo "$GITHUB_REPOSITORY" --json body --jq '.body // ""' || echo "")
+          fi
+          if printf '%s' "$last" | grep -q "version:${ver}" && printf '%s' "$last" | grep -q "luci:${luci}"; then
+            echo "无变化（core ${ver} / luci ${luci} 与最近一次 Release 相同）：跳过编译与发布"
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "检测到变化（core ${ver} / luci ${luci}）：继续编译"
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+
+  build:
+    name: Build ${{ matrix.short }}
+    runs-on: ubuntu-latest
+    needs: prepare
+    if: needs.prepare.outputs.should_build == 'true'
+    # contents: read 用于 checkout；actions: write 用于 upload-artifact
+    # （限制 permissions 后 artifact 上传需要该 scope，否则 403）
+    permissions:
+      contents: read
+      actions: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            short: x86_64
+          - arch: aarch64_generic
+            short: aarch64
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build packages
+        uses: sbwml/openwrt-gh-action-sdk@a5b2472e626ba279c75c77f82a4e5385303f9561 # go1.26
+        env:
+          ARCH: ${{ matrix.arch }}-${{ needs.prepare.outputs.sdk }}
+          FEEDNAME: packages_ci
+          PACKAGES: ${{ needs.prepare.outputs.packages }}
+          NO_REFRESH_CHECK: true
+          NO_SHFMT_CHECK: true
+          V: s
+
+      - name: Assert no vmlinux-btf dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+              # 依赖在包 Makefile 里声明，这里对仓库内所有 tracked Makefile 做断言。
+              # 不按产物 apk 校验：25.x 的 apk 是 apk-tools v3 的 ADB 容器（magic `ADBd`，
+              # 既不是 gzip 也不是 tar），原先的 `gzip -dc | tar -xO .PKGINFO` 只会静默空过。
+              # 真要产物级校验需在 SDK 容器内用 apk-tools（`apk adbdump`）。
+          shopt -s nullglob
+          found=0
+          checked=0
+          while IFS= read -r mk; do
+            checked=$((checked + 1))
+            if grep -nE '[+:]vmlinux-btf' "$mk"; then
+              echo "::error file=$mk::仍然声明 vmlinux-btf 依赖"
+              found=1
+            fi
+          done < <(git ls-files | grep -E '(^|/)Makefile$')
+          if [ "$checked" -eq 0 ]; then
+            echo "::error::没有找到任何 Makefile，断言未生效"
+            exit 1
+          fi
+          apks=(bin/packages/${{ matrix.arch }}/packages_ci/*.apk)
+          if [ "${#apks[@]}" -eq 0 ]; then
+            echo "::error::没有产出 apk，断言未生效"
+            exit 1
+          fi
+          echo "✓ 已检查 $checked 个 Makefile，均未声明 vmlinux-btf；产物 apk ${#apks[@]} 个："
+          for f in "${apks[@]}"; do
+            echo "    $(basename "$f")  $(( $(stat -c%s "$f") / 1024 )) KB"
+          done
+          if [ "$found" -ne 0 ]; then
+            echo "包依赖里仍有 vmlinux-btf，终止发布"
+            exit 1
+          fi
+
+      - name: Upload build artifacts
+        # PR（含 dependabot）run 的 token 是只读的，artifact 上传必然 403；PR 只验证能编译
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: apk-${{ matrix.short }}
+          path: bin/packages/${{ matrix.arch }}/packages_ci/*.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish release
+    runs-on: ubuntu-latest
+    needs:
+      - prepare
+      - build
+    # PR 只构建不发布；仅本 job 提升写权限（contents: 发 Release / actions: 清理 workflow run）
+    if: github.event_name != 'pull_request' && needs.prepare.outputs.should_build == 'true'
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - name: Download apk artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: apk-*
+          path: release-dist
+
+      - name: Assemble release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p rel
+          for d in release-dist/*/; do
+            label="${d#release-dist/}"
+            label="${label%/}"
+            label="${label#apk-}"
+            for f in "$d"*.apk; do
+              [ -e "$f" ] || continue
+              name=$(basename "$f")
+              case "$name" in
+                honk-*)
+                  cp "$f" "rel/${name%.apk}-${label}.apk"
+                  ;;
+                *)
+                  [ "$label" = "x86_64" ] && cp "$f" "rel/$name"
+                  ;;
+              esac
+            done
+          done
+          echo "=== release assets ==="
+          ls -1 rel
+
+      - name: Generate SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd rel
+          count=$(ls -1 ./*.apk 2>/dev/null | wc -l)
+          [ "$count" -gt 0 ] || { echo "::error::rel/ 中没有 apk，无法生成校验文件"; exit 1; }
+          for f in *.apk; do sha256sum "$f"; done > SHA256SUMS
+          echo "=== SHA256SUMS ==="
+          cat SHA256SUMS
+
+      - name: Replace old release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ needs.prepare.outputs.release_tag }}"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            assets=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name')
+            if [ -n "$assets" ]; then
+              for a in $assets; do
+                echo "remove old asset: $a"
+                gh release delete-asset "$tag" --repo "$GITHUB_REPOSITORY" --yes "$a"
+              done
+            fi
+          fi
+
+      - name: Create or update GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ needs.prepare.outputs.release_tag }}"
+          title="${{ needs.prepare.outputs.release_name }}"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" rel/* --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --notes "version:${{ needs.prepare.outputs.version }} luci:${{ needs.prepare.outputs.luci_version }} Automated build of ${title}"
+          else
+            gh release create "$tag" rel/* --repo "$GITHUB_REPOSITORY" --title "$title" --notes "version:${{ needs.prepare.outputs.version }} luci:${{ needs.prepare.outputs.luci_version }} Automated build of ${title}"
+          fi
+
+      - name: Delete old releases
+        uses: ophub/delete-releases-workflows@9c4138644d440d66f145e5ab03a98f03b5cbf2b0 # main (2026-06-17；该 commit 无对应 tag，v0.1.0 更早)
+        with:
+          delete_releases: true
+          releases_keep_latest: 2
+          delete_tags: true
+          delete_workflows: true
+          workflows_keep_day: 2
+          gh_token: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      - name: Cleanup old action artifacts
+        uses: c-hive/gha-remove-artifacts@62c2fbea931baa7dd4a6b73ea5a799984a818f61 # v1.8.0
+        with:
+          age: '2 days'
+          skip-recent: 2
+        continue-on-error: true
+
+  lint-po:
+    # po 与源码一致性：po 里的实体 msgid 必须能在 htdocs/ root/ 等源码中找到，
+    # 防止界面文案改了、po 里却留下永不被引用的死条目（脚本见 scripts/check-po.sh）
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check po consistency
+        run: sh scripts/check-po.sh .

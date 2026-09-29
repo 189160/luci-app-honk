@@ -1,0 +1,40 @@
+# route.dae
+routing {
+    # 本机 WAN / LAN 地址放行（b79 起 honk 不再自动插入）。
+    # 接口取自 global.wan_interface / global.lan_interface（值为 auto 时回退自动侦测），
+    # 由 /etc/hotplug.d/iface/99-honk 在接口事件时填入实际地址。
+    dip() -> direct(must)  # AUTO_WAN4_IP
+    dip() -> direct(must)  # AUTO_WAN6_IP
+    dip() -> direct(must)  # AUTO_LAN6_IP
+
+    # dnsmasq 若另有外部 :53 上游，本条让那些查询走原生路径、不进 honk 的 DNS 控制器。
+    # zerotier 单列一条：合并成 pname(dnsmasq, zerotier-one) 会把它的放行一并收窄到 dport(53)。
+    pname(dnsmasq) && l4proto(udp) && dport(53) -> direct(must)
+    pname(zerotier-one) -> direct(must)
+    dip(224.0.0.0/3, 'ff00::/8', geoip:private) -> direct
+    domain(geosite:category-bank-cn, geosite:boc@!cn, geosite:synology) -> direct
+    dport(123) -> direct
+
+    # 广告阻止
+    domain(geosite:category-ads-all) -> block
+
+    # block quic, if u node has poor quic support, enable this line
+    # l4proto(udp) && dport(443) -> block
+
+    domain(geosite:spotify) -> proxy
+    domain(geosite:category-doh) -> proxy
+    domain(geosite:tiktok) -> proxy
+    domain(geosite:category-ai-!cn, geosite:github) -> proxy
+    domain(geosite:gfw) -> proxy
+
+    dip(geoip:telegram) -> proxy
+
+    dip(geoip:cn) -> direct
+    # geoip:cn always using chiness asn, can use domain rule to override
+    domain(geosite: cn) -> direct
+
+    # using proxy for ssh, http, https, and common ports, avoid (bt, or other p2p)
+    dport(22, 80, 443, 8080, 6443, 9090) -> proxy
+
+    fallback: direct
+}

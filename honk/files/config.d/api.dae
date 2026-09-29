@@ -1,0 +1,34 @@
+# native_api 配置参考（native-api 分支专属；上游预编译核心不含此功能）
+#
+# 整段保持注释：experimental 段对未知子块直接报错，预编译核心不认识 native_api，
+# 取消注释又没换核心会让 honk 启动失败（换核心见 README）。
+# 下列字段改动一律要重启生效（SIGHUP 会忽略这些变更并保留当前 listener，不是报错）。
+# 本文件含 secret ⇒ 会被 honk 判为凭据源而在面板里只读；这也是它独立成文件的原因：
+# 写进主 config.dae 会让主文件只读，连带面板的节点/分组管理失效。
+#
+# 认证三选一：非空 secret（token）／password_auth: true（密码）／allow_anonymous_loopback: true
+# （loopback、开发用）；secret 须为不含空白与逗号的可见 ASCII，短于 8 字节不会被遮蔽。
+#
+# experimental {
+#     native_api {
+#         enabled: false                 # 改成 true 才启动监听（要求 listen 为数字 IP + 非 0 端口，且已有凭据）
+#         listen: '127.0.0.1:9527'       # 只接受数字 IP:port；从 LAN 访问改成 '0.0.0.0:9527'
+#         secret: ''                     # 填一个 ≥8 字节的随机串
+#         ui: '/usr/share/honk/doona'    # 面板目录的**绝对路径**；'embedded' 需要 native-ui feature（现成二进制都没有）
+#         # config_write: true           # 允许 doona 面板改写**其它**配置文件（要求 secret 非空）
+#         # allowed_hosts: 'panel.example'              # 显式 host，不能带 scheme、不能用通配符
+#         # allow_origins: 'https://panel.example'      # 显式 origin，不能带路径
+#         # record_flows: true           # record_traffic / record_memory / record_logs / record_dns_log 同理（默认全 true）
+#         # probe_allowed_cidrs: '192.168.0.0/16'       # 显式 IP CIDR
+#         # probe_allowed_ports: 443                    # 1..65535
+#         # geosite_download_url: 'https://example.com/geosite.dat'   # 无凭据、无 fragment 的 http(s) URL
+#         # geoip_download_url: 'https://example.com/geoip.dat'
+#         # —— 以下两个是「接受但无效」的遗留字段，写与不写完全一样 ——
+#         # config_content: true         # 读配置内容本来就不需要开关：任何通过认证的请求都可读，
+#         #                              #   只有监听凭据值会被遮蔽。此字段解析后即被丢弃。
+#         # writable_includes: 'x.dae'   # 既不授权也不限制；能改哪些源只看 config_write + 逐源可写性
+#     }
+# }
+#
+# 提示：allowed_hosts 只写对外域名时，本机探测会因 Host 校验被拒，面板会显示「本机探测无响应」；
+#       把 '127.0.0.1:9527' 一并列入即可。

@@ -1,0 +1,38 @@
+# config.dae
+# Load all honk files placed in ./config.d/.
+include {
+    config.d/*.dae
+}
+
+global {
+    # 写 auto 由 daemon 自动侦测接口；也可直接指定设备名（如 pppoe-wan / eth0）
+    wan_interface: auto
+    lan_interface: br-lan
+    log_level: info
+    # 客户端不经过 honk 的 DNS（未使用 dns bind）时，建议改用 domain++
+    dial_mode: domain
+    allow_insecure: false
+    auto_config_kernel_parameter: true
+    data_dir: '/etc/honk'
+    log_file: '/var/log/honk/honk.log'
+    tcp_check_url: 'https://www.gstatic.com/generate_204'
+    tcp_check_http_method: HEAD
+    udp_check_dns: 'dns.google.com:53,8.8.8.8,2001:4860:4860::8888'
+    check_interval: 300s
+    bootstrap_resolver: '223.5.5.5:53'
+    store_subscribe: true
+    nfqueue_enable: true
+    udp_warm_node_count: 0
+    preconnect_node_count: 0
+    max_concurrent_dials: 1024
+}
+
+# 实验性功能（cache-file）；clash-api 需 clash-api feature，本仓库编译时未启用
+#experimental {
+#    cache_file {
+#        enabled: true
+#        path: 'cache.db'
+#        store_fakeip: false
+#        store_dns: false
+#    }
+#}

@@ -1,0 +1,38 @@
+#!/bin/sh
+# 输出 honk 的运行状态与内存占用（一行 JSON：{running, memory_kb}），供状态卡片轮询。
+
+pid=""
+
+for dir in /proc/[0-9]*; do
+	[ -r "$dir/comm" ] || continue
+
+	comm=""
+	read -r comm < "$dir/comm" 2>/dev/null
+
+	if [ "$comm" = "honk-core" ]; then
+		pid="${dir#/proc/}"
+		break
+	fi
+done
+
+if [ -z "$pid" ]; then
+	printf '{"running":false}\n'
+	exit 0
+fi
+
+mem=""
+
+if [ -r "/proc/$pid/status" ]; then
+	while read -r key value rest; do
+		if [ "$key" = "VmRSS:" ]; then
+			mem="$value"
+			break
+		fi
+	done < "/proc/$pid/status"
+fi
+
+if [ -n "$mem" ]; then
+	printf '{"running":true,"pid":%s,"memory_kb":%s}\n' "$pid" "$mem"
+else
+	printf '{"running":true,"pid":%s}\n' "$pid"
+fi

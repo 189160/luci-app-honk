@@ -1,0 +1,90 @@
+name: Update honk version
+
+on:
+  schedule:
+    - cron: '17 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  update:
+    name: Update honk core version
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Update honk version
+        run: bash scripts/update_honk_version.sh
+
+      - name: Commit changes
+        id: commit
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No version change."
+          else
+            TAG="$(grep '^HONK_RELEASE_TAG:=' honk/Makefile | cut -d= -f2)"
+            git add honk/Makefile
+            git commit -m "honk: update to ${TAG}"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push changes
+        if: steps.commit.outputs.changed == 'true'
+        run: git push origin HEAD:main
+          # 不能删：用默认 GITHUB_TOKEN 完成的 push 不触发其它 workflow（GitHub 递归保护），
+          # 所以必须显式 dispatch。将来改用 PAT 推送时会各起一次 run，由 build-apk 的
+          # concurrency（同一 ref、cancel-in-progress）兜住重复。
+      - name: Trigger build packages
+        if: steps.commit.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          branch=main
+          want="$(git rev-parse HEAD)"
+          got=""
+
+              # 派发前先等远端 ref 追上本地 HEAD：`gh workflow run --ref` 取的是该分支当时的
+              # HEAD，ref 未更新就会派发到旧提交 ⇒ 守卫判「无变化」而跳过，且表现是全绿。
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            got="$(git ls-remote origin "refs/heads/${branch}" | cut -f1)"
+            if [ "$got" = "$want" ]; then break; fi
+            echo "… 远端 ${branch}=${got:-空}，本地 HEAD=${want}，等待中（${i}/12）"
+            sleep 5
+          done
+          if [ "$got" != "$want" ]; then
+            echo "::error::远端 ${branch} 未更新到 ${want}，放弃派发"
+            exit 1
+          fi
+
+          gh workflow run "Build apk" --repo "$GITHUB_REPOSITORY" --ref "$branch"
+
+          # 再核对派发出去的 run 的 headSha：gh workflow run 是按「工作流名」定位的（改名即失效），
+          # 事件理论上也可能被丢弃，所以派发完必须确认真的有一个 run 落在本次提交上，
+          # 不要「发完就当成功」。
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            sleep 5
+            got="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "Build apk" \
+                     --branch "$branch" --limit 1 --json headSha --jq '.[0].headSha // ""')"
+            if [ "$got" = "$want" ]; then
+              echo "✓ 已派发 Build apk（headSha=${got}）"
+              exit 0
+            fi
+            echo "… 最新 run 的 headSha=${got:-空}，期望 ${want}（${i}/12）"
+          done
+          echo "::error::派发的 Build apk 未落到 ${want}，请手动在 Actions 里触发"
+          exit 1
+

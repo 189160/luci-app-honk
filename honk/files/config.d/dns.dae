@@ -1,0 +1,28 @@
+# dns.dae
+dns {
+    # use_host: true  # 优先使用 /etc/hosts；修改后需 SIGHUP
+    # 只绑 loopback：LAN 侧交给 dnsmasq 收口，再把未知域名转发到这里。
+    bind: '127.0.0.1:5335'
+    upstream {
+        cn_53: 'udp://dns.alidns.com:53' -> direct
+        ww_53: 'tcp+udp://dns.google:53' -> proxy
+        cn_h2: 'https://dns.alidns.com:443/dns-query' -> direct
+        ww_h2: 'https://dns.google:443/dns-query' -> proxy
+        cn_h3: 'h3://dns.alidns.com:443/dns-query' -> direct
+        ww_h3: 'h3://dns.google:443/dns-query' -> proxy
+    }
+    routing {
+        request {
+            # qname / qtype | reject / asis 均已支持；
+            # qtype(https) -> reject
+            qname(geosite:category-ads-all) -> reject
+            qname(geosite:private) -> cn_h3
+            qname(geosite:apple@cn) -> cn_h3
+            qname(geosite:category-games-cn) -> cn_h3
+            qname(geosite:category-games@cn) -> cn_h3
+            qname(geosite:geolocation-cn) -> cn_h3
+            qname(geosite:cn) -> cn_h3
+            fallback: ww_h3
+        }
+    }
+}

@@ -1,0 +1,168 @@
+#!/bin/sh
+# 探测 native_api 的配置与运行态，输出一行 JSON 给面板页。
+#
+# 按花括号配平取出 native_api 块（避免误取 clash_api 里的同名字段），再探
+# http://127.0.0.1:<listen 端口>/api 的 discovery；discovery 原文透传给 JS 解析。
+# 探测必须在路由器侧做：honk 的 GET /api 默认不发 CORS 头，浏览器跨源必被拦。
+
+CFG=/etc/honk/config.d/api.dae
+
+# 取出 native_api 块（按花括号配平），避免误取 clash_api 里的同名字段（如 cache_file.enabled）。
+# 先剥掉注释：否则"整段被注释掉"的 native_api 也会被当成生效的块。
+# ⚠️ awk 变量名不能用 open/close —— 它们是 awk 的内建函数名，busybox awk 会直接报语法错误。
+native_block() {
+	[ -r "$CFG" ] || return 0
+
+	sed -e 's/^[[:space:]]*#.*$//' -e 's/[[:space:]]#.*$//' "$CFG" | awk '
+		!inside && $0 ~ /(^|[^A-Za-z_])native_api[[:space:]]*\{/ { inside = 1 }
+		inside {
+			n_open  = gsub(/\{/, "{")
+			n_close = gsub(/\}/, "}")
+			depth += n_open - n_close
+			print
+			if (depth <= 0) exit
+		}
+	'
+}
+
+# 从 native_api 块里取 <key>: <value>（取第一行）。
+# ⚠️ 去掉尾部空白必须在去引号**之前** —— 否则 `listen: '1.2.3.4:5'   # 注释`
+#    剥掉注释后会剩尾随空格，`s/'$//` 匹配不上，值里会残留一个引号。
+field() {
+	printf '%s\n' "$BLOCK" \
+		| sed -n "s/^[[:space:]]*$1[[:space:]]*:[[:space:]]*//p" \
+		| head -n 1 \
+		| sed "s/[[:space:]]*$//; s/^'//; s/'$//; s/^\"//; s/\"$//; s/[[:space:]]*$//"
+}
+
+# 列表字段：dae 的把列表写成一行 `key: 'a', 'b'`，按逗号切开、逐项去引号，输出一项一行。
+list() {
+	printf '%s\n' "$BLOCK" \
+		| sed -n "s/^[[:space:]]*$1[[:space:]]*:[[:space:]]*//p" \
+		| head -n 1 \
+		| tr ',' '\n' \
+		| sed "s/[[:space:]]*$//; s/^[[:space:]]*//; s/^'//; s/'$//; s/^\"//; s/\"$//" \
+		| sed '/^$/d'
+}
+
+# 把 list 输出的逐行内容拼成 JSON 数组（转义 \ 与 "）。
+list_json() {
+	printf '[%s]' "$(list "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' \
+		| awk 'BEGIN{ORS=""}{printf "%s\"%s\"", (NR>1?",":""), $0}')"
+}
+
+# 单个字符串的 JSON 转义
+esc() {
+	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+# 普通抓取（只判可达）
+fetch() {
+	if command -v wget >/dev/null 2>&1; then
+		wget -q -O - -T 3 "$1" 2>/dev/null
+	elif command -v uclient-fetch >/dev/null 2>&1; then
+		uclient-fetch -q -O - -T 3 "$1" 2>/dev/null
+	fi
+}
+
+if [ -r "$CFG" ]; then
+	present=true
+else
+	present=false
+fi
+
+BLOCK=$(native_block)
+
+# 文件里到底有没有**生效**的 native_api 块：整段被注释时这里为空，
+# 与「enabled 明确写了 false」是两种情况，页面据此给出不同提示。
+if [ -n "$BLOCK" ]; then
+	block_present=true
+else
+	block_present=false
+fi
+
+enabled=$(field enabled)
+listen=$(field listen)
+ui=$(field ui)
+secret=$(field secret)
+
+[ -n "$enabled" ] || enabled=false
+[ -n "$listen" ] || listen="127.0.0.1:9527"
+
+# 只输出"有没有"，值本身不出设备
+if [ -n "$secret" ]; then
+	secret_set=true
+else
+	secret_set=false
+fi
+
+port="${listen##*:}"
+url="http://127.0.0.1:$port/ui/"
+
+reachable=false
+
+if [ "$enabled" = "true" ] && [ -n "$ui" ] && [ "$ui" != "embedded" ]; then
+	[ -n "$(fetch "$url")" ] && reachable=true
+fi
+
+# ---- 进程是否在跑：与 honk-status 同一套判据（读 /proc 的 comm），但这里自带一份，
+#      免得探测脚本依赖隔壁脚本；root 下 /proc/*/comm 一律可读 ----
+running=false
+for d in /proc/[0-9]*; do
+	[ -r "$d/comm" ] || continue
+	comm=""
+	read -r comm < "$d/comm" 2>/dev/null
+	if [ "$comm" = "honk-core" ]; then
+		running=true
+		break
+	fi
+done
+
+# ---- 面板目录：只处理绝对路径（相对路径交由页面提示改写）----
+dir=""
+absolute=false
+exists=false
+has_index=false
+writable=false
+title=""
+version=""
+managed=false
+
+case "$ui" in
+	/*) dir="$ui"; absolute=true ;;
+esac
+
+if [ "$absolute" = true ] && [ "$dir" != "/" ]; then
+	[ -d "$dir" ] && exists=true
+
+	if [ "$exists" = true ]; then
+		[ -r "$dir/index.html" ] && has_index=true
+		[ -w "$dir" ] && writable=true
+		[ -f "$dir/.honk-panel.json" ] && managed=true
+
+		if [ "$has_index" = true ]; then
+			title=$(sed -n 's/.*<title>\(.*\)<\/title>.*/\1/p' "$dir/index.html" 2>/dev/null | head -n 1)
+		fi
+
+		if [ "$managed" = true ]; then
+			version=$(sed -n 's/.*"version":"\([^"]*\)".*/\1/p' "$dir/.honk-panel.json" 2>/dev/null | head -n 1)
+		fi
+		if [ -z "$version" ] && [ -r "$dir/CHANGELOG.md" ]; then
+			version=$(sed -n 's/^## \[\([^]]*\)\].*/\1/p' "$dir/CHANGELOG.md" 2>/dev/null | head -n 1)
+		fi
+	else
+		# 目录还不存在（首次安装）：以父目录可写为准
+		parent=$(dirname "$dir")
+		[ -w "$parent" ] && writable=true
+	fi
+fi
+
+printf '{"configured":{"present":%s,"enabled":%s,"block_present":%s,"listen":"%s","ui":"%s","secret_configured":%s,"allow_origins":%s,"allowed_hosts":%s},' \
+	"$present" "$enabled" "$block_present" "$(esc "$listen")" "$(esc "$ui")" "$secret_set" "$(list_json allow_origins)" "$(list_json allowed_hosts)"
+
+printf '"service":{"running":%s},' "$running"
+
+printf '"probe":{"reachable":%s},' "$reachable"
+
+printf '"panel":{"dir":"%s","absolute":%s,"exists":%s,"index":%s,"writable":%s,"title":"%s","version":"%s","managed":%s}}\n' \
+	"$(esc "$dir")" "$absolute" "$exists" "$has_index" "$writable" "$(esc "$title")" "$(esc "$version")" "$managed"

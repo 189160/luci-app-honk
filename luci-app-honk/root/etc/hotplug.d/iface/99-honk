@@ -1,0 +1,102 @@
+#!/bin/sh
+# 接口地址变化时，把 route.dae 里的 AUTO_*_IP 占位行替换成当前实际地址。
+# 5 秒防抖（同一批 ifup/ifupdate 只处理最后一次），内容有变化才落盘并 hot_reload。
+
+if [ "$ACTION" != "ifup" ] && [ "$ACTION" != "ifupdate" ]; then
+    exit 0
+fi
+
+if [ "$ACTION" = "ifupdate" ]; then
+    if [ -z "$IFUPDATE_ADDRESSES" ] && [ -z "$IFUPDATE_DATA" ]; then
+        exit 0
+    fi
+fi
+
+if [ "$(uci -q get honk.config.enabled)" != "1" ]; then
+    exit 0
+fi
+
+ROUTE_FILE="/etc/honk/config.d/route.dae"
+for m in AUTO_WAN4_IP AUTO_WAN6_IP AUTO_LAN6_IP; do
+    if ! grep -q "# $m" "$ROUTE_FILE" 2>/dev/null; then
+        exit 0
+    fi
+done
+
+CONF_DIR="/etc/honk"
+conf_get() {
+    sed -n "s/^[[:space:]]*$1[[:space:]]*:[[:space:]]*//p" "$CONF_DIR"/config.dae "$CONF_DIR"/config.d/*.dae 2>/dev/null \
+    | sed 's/#.*$//' | tr -d "\"' \t\r" | sed -n '$p' | cut -d, -f1
+}
+
+WAN_IF="$(conf_get wan_interface)"
+LAN_IF="$(conf_get lan_interface)"
+if [ -z "$LAN_IF" ] || [ "$LAN_IF" = "auto" ]; then
+    LAN_IF="br-lan"
+fi
+
+case "$WAN_IF" in
+"" | auto)
+    . /lib/functions/network.sh
+    network_flush_cache
+    network_find_wan NET_IF
+    network_get_device WAN_IF "$NET_IF" 2>/dev/null
+    if [ -z "$WAN_IF" ]; then
+        WAN_IF="$NET_IF"
+    fi
+    ;;
+esac
+
+if [ -n "$DEVICE" ] && [ "$DEVICE" != "$WAN_IF" ] && [ "$DEVICE" != "$LAN_IF" ]; then
+    exit 0
+fi
+
+WAN4=$(ip -o -4 addr show dev "$WAN_IF" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | sed -n '1p')
+WAN6=$(ip -o -6 addr show dev "$WAN_IF" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -Ev '^(fe80|f[cd])' | sed -n '1p')
+if [ -z "$WAN6" ]; then
+    WAN6=$(ubus call network.interface.wan6 status 2>/dev/null | jsonfilter -e '@.ipv6-address[0].address')
+fi
+LAN6=$(ip -o -6 addr show dev "$LAN_IF" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -Ev '^(fe80|f[cd])' | sed -n '1p')
+if [ -z "$LAN6" ]; then
+    LAN6=$(ubus call network.interface.lan status 2>/dev/null | jsonfilter -e '@.ipv6-address[0].address')
+fi
+
+# 地址取不到时（例如接口还没拿到地址）$WAN4/$WAN6/$LAN6 为空串，awk 保留原占位行 ——
+# 不能写出 dip() 这种空条目。注意传进 awk 的必须是「地址」本身：若传整行模板，
+# 模板里 "dip(...)" 恒非空，判空永远为真，占位行会被替换成 dip()。
+
+DEBOUNCE_FILE="/tmp/run/honk_hotplug_gen"
+mkdir -p /tmp/run
+my_gen="$$.$(date +%s)"
+echo "$my_gen" > "$DEBOUNCE_FILE"
+
+(
+    sleep 5
+    if [ "$(cat "$DEBOUNCE_FILE" 2>/dev/null)" != "$my_gen" ]; then
+        exit 0
+    fi
+
+    TMP=$(mktemp) || exit 0
+    awk -v w4="$WAN4" -v w6="$WAN6" -v l6="$LAN6" '
+      /# AUTO_WAN4_IP/ { if (w4 != "") print "    dip(" w4 ") -> direct(must)  # AUTO_WAN4_IP"; else print; next }
+      /# AUTO_WAN6_IP/ { if (w6 != "") print "    dip(" w6 ") -> direct(must)  # AUTO_WAN6_IP"; else print; next }
+      /# AUTO_LAN6_IP/ { if (l6 != "") print "    dip(" l6 ") -> direct(must)  # AUTO_LAN6_IP"; else print; next }
+      { print }
+    ' "$ROUTE_FILE" > "$TMP"
+
+    if cmp -s "$TMP" "$ROUTE_FILE"; then
+        rm -f "$TMP"
+        exit 0
+    fi
+
+    # 落盘固定权限：mv 会把 mktemp 的 0600 带成目标文件权限，install 不会
+    if command -v install >/dev/null 2>&1; then
+        install -m 640 "$TMP" "$ROUTE_FILE" || { rm -f "$TMP"; exit 1; }
+    else
+        # busybox 未必带 install applet：退化为写内容 + chmod，同样不用 mv
+        cat "$TMP" > "$ROUTE_FILE" && chmod 640 "$ROUTE_FILE" || { rm -f "$TMP"; exit 1; }
+    fi
+    rm -f "$TMP"
+
+    /etc/init.d/honk running && /etc/init.d/honk hot_reload
+) &

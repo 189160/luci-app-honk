@@ -1,0 +1,361 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: luci-app-honk\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: \n"
+"PO-Revision-Date: \n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"Language: zh_Hans\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+msgid "HONK"
+msgstr "HONK"
+
+msgid "RUNNING"
+msgstr "运行中"
+
+msgid "NOT RUNNING"
+msgstr "未运行"
+
+msgid "Collecting data..."
+msgstr "收集数据..."
+
+msgid "Start Service"
+msgstr "启动服务"
+
+msgid "Running Status"
+msgstr "运行状态"
+
+msgid "Reload Now"
+msgstr "立即重载"
+
+msgid "Node Settings"
+msgstr "节点设置"
+
+msgid "Global Configuration"
+msgstr "全局配置"
+
+msgid "DNS Configuration"
+msgstr "解析配置"
+
+msgid "Node Configuration"
+msgstr "节点配置"
+
+msgid "Route Configuration"
+msgstr "路由配置"
+
+msgid "Configure global settings for HONK."
+msgstr "调整 HONK 的全局设置。"
+
+msgid "Configure DNS settings for HONK."
+msgstr "调整 HONK 的解析配置。"
+
+msgid "Configure nodes and groups for HONK."
+msgstr "调整 HONK 的节点与分组配置。"
+
+msgid "Configure routing rules for HONK."
+msgstr "调整 HONK 的路由配置。"
+
+msgid "Logs"
+msgstr "日志"
+
+msgid "Scroll to bottom"
+msgstr "滚动到底部"
+
+msgid "Scroll to top"
+msgstr "滚动到顶部"
+
+msgid "Memory Usage"
+msgstr "内存占用"
+
+msgid "Format Code"
+msgstr "格式化代码"
+
+msgid "Configuration"
+msgstr "配置"
+
+msgid "Unable to read %s: %s"
+msgstr "无法读取 %s：%s"
+
+msgid "Configuration saved. Use %s to apply it."
+msgstr "配置已保存，点「%s」使其生效。"
+
+msgid "Editor unavailable, plain textarea is used: %s"
+msgstr "编辑器不可用，已退回普通文本框：%s"
+
+msgid "Service reloaded successfully"
+msgstr "服务重载成功"
+
+msgid "Reload failed: %s"
+msgstr "重载失败：%s"
+
+msgid "Restart Now"
+msgstr "立即重启"
+
+msgid "Restart failed: %s"
+msgstr "重启失败：%s"
+
+msgid "Service restarted successfully"
+msgstr "服务重启成功"
+
+msgid "A newer release is available: %s"
+msgstr "有新版本：%s"
+
+msgid "Access key configured"
+msgstr "访问密钥已配置"
+
+msgid "Another update is already running"
+msgstr "另一个更新正在进行"
+
+msgid "Cancel"
+msgstr "取消"
+
+msgid "Checking for a newer release..."
+msgstr "正在检查新版本..."
+
+msgid "Continue"
+msgstr "继续"
+
+msgid "Custom"
+msgstr "自定义"
+
+msgid "Doona (default)"
+msgstr "Doona（默认）"
+
+msgid "Extracting the archive failed"
+msgstr "解压失败"
+
+msgid "No access key configured"
+msgstr "未配置访问密钥"
+
+msgid "No native API configuration file was found"
+msgstr "没有找到 native API 配置文件"
+
+msgid "No panel directory is configured"
+msgstr "未配置面板目录"
+
+msgid "Not enough free space"
+msgstr "可用空间不足"
+
+msgid "Not enough free space: %s KB available, %s KB required"
+msgstr "可用空间不足：可用 %s KB，需要 %s KB"
+
+msgid "Not updated from this page"
+msgstr "不由本页更新"
+
+msgid "Open Panel"
+msgstr "打开面板"
+
+msgid "Overwrite the panel directory?"
+msgstr "覆盖面板目录？"
+
+msgid "Panel"
+msgstr "面板"
+
+msgid "Panel address"
+msgstr "面板地址"
+
+msgid "Panel directory %s"
+msgstr "面板目录 %s"
+
+msgid "Panel updated to version %s."
+msgstr "面板已更新到 %s。"
+
+msgid "Refresh Status"
+msgstr "刷新状态"
+
+msgid "Replacing the panel directory failed"
+msgstr "替换面板目录失败"
+
+msgid "The checksum did not match"
+msgstr "校验和不匹配"
+
+msgid "The configured panel directory is not a usable absolute path"
+msgstr "配置的面板目录不是可用的绝对路径"
+
+msgid "The directory %s was not installed from this page. Updating replaces its contents with the official release and keeps no copy of the current files."
+msgstr "%s 不是本页安装的。更新会用官方 release 的文件替换目录内现有内容，不保留副本。"
+
+msgid "The download failed"
+msgstr "下载失败"
+
+msgid "The downloaded archive is not usable"
+msgstr "下载的归档不可用"
+
+msgid "The honk service is disabled"
+msgstr "honk 服务未启用"
+
+msgid "The native API listener is disabled"
+msgstr "native API 监听未启用"
+
+msgid "The native_api block is commented out or missing"
+msgstr "native_api 配置块被注释掉或不存在"
+
+msgid "The panel directory does not exist"
+msgstr "面板目录不存在"
+
+msgid "The panel directory holds no readable index.html"
+msgstr "面板目录里没有可读的 index.html"
+
+msgid "The panel directory was not installed from this page"
+msgstr "面板目录不是本页安装的"
+
+msgid "The panel is fetched from the official release, verified against SHA256SUMS and unpacked over the panel directory. That directory comes from ui in the honk configuration and has to be writable."
+msgstr "面板取自官方 release，经 SHA256SUMS 校验后解压覆盖面板目录。该目录来自 honk 配置里的 ui，需要可写。"
+
+msgid "The update failed"
+msgstr "更新失败"
+
+msgid "This build does not embed the panel"
+msgstr "当前二进制不含内嵌面板"
+
+msgid "Unable to determine the latest release"
+msgstr "无法取得最新 release 版本号"
+
+msgid "Unable to determine whether a newer release exists"
+msgstr "无法判定是否有新版本"
+
+msgid "Unparsable output from %s"
+msgstr "%s 的输出无法解析"
+
+msgid "Up to date"
+msgstr "已是最新"
+
+msgid "Update Panel"
+msgstr "更新面板"
+
+msgid "Update anyway"
+msgstr "仍然更新"
+
+msgid "Update source"
+msgstr "更新来源"
+
+msgid "Updating replaces the contents of %s with the official release and keeps no copy of the current files."
+msgstr "更新会用官方 release 的文件替换 %s 内的内容，不保留现有文件的副本。"
+
+msgid "Updating..."
+msgstr "更新中..."
+
+msgid "Version %s"
+msgstr "版本 %s"
+
+msgid "Version unknown"
+msgstr "版本未知"
+
+msgid "from allow_origins"
+msgstr "来自 allow_origins"
+
+msgid "from allowed_hosts (protocol taken from this page)"
+msgstr "来自 allowed_hosts（协议取当前访问方式）"
+
+msgid "from listen"
+msgstr "按 listen 推导"
+
+msgid "from listen (loopback, so it only opens on the router itself)"
+msgstr "按 listen 推导（回环地址，只能在路由器本机打开）"
+
+msgid "ui is not an absolute path"
+msgstr "ui 不是绝对路径"
+
+msgid "ui is set to embedded, which this build does not provide"
+msgstr "ui 为 embedded，当前二进制不含内嵌面板"
+
+msgid "unset"
+msgstr "未设置"
+
+msgid "matches how you opened this page"
+msgstr "与当前访问方式一致"
+
+msgid "LAN address (from listen)"
+msgstr "局域网地址（来自 listen）"
+
+msgid "external: %s"
+msgstr "对外：%s"
+
+msgid "The honk service is not running"
+msgstr "honk 服务未在运行"
+
+msgid "The local probe got no answer"
+msgstr "本机探测无响应"
+
+msgid "%s timed out after %s seconds"
+msgstr "%s 超过 %s 秒仍未返回"
+
+msgid "Status probe"
+msgstr "状态探测"
+
+msgid "Version check"
+msgstr "版本检查"
+
+msgid "Panel update"
+msgstr "面板更新"
+
+msgid "Downloading the panel package..."
+msgstr "正在下载面板程序包..."
+
+msgid "Downloading the fonts..."
+msgstr "正在下载字体包..."
+
+msgid "Downloading the checksum list..."
+msgstr "正在下载校验清单..."
+
+msgid "Verifying checksums..."
+msgstr "正在校验..."
+
+msgid "Extracting..."
+msgstr "正在解压..."
+
+msgid "Replacing the panel directory..."
+msgstr "正在替换面板目录..."
+
+msgid "Starting..."
+msgstr "开始..."
+
+msgid "Up to date (version %s); nothing to do."
+msgstr "已是最新（版本 %s），无需更新。"
+
+msgid "General Settings"
+msgstr "常规设置"
+
+msgid "Panel status and online updates"
+msgstr "面板状态与在线更新"
+
+msgid "Panel Configuration"
+msgstr "面板配置"
+
+msgid "HONK global switches and configuration"
+msgstr "HONK 的全局开关与配置"
+
+msgid "Config Block"
+msgstr "配置块"
+
+msgid "Configure global settings for HONK. Configure the include field correctly for separate config to work, or enter the complete configuration here."
+msgstr "调整 HONK 的全局配置。拆分配置需正确设置 include 字段，或在此填写完整配置。"
+
+msgid "Configure the panel. Editing this configuration requires a service restart to take effect."
+msgstr "调整 HONK 的面板配置。编辑此配置需重启生效。"
+
+msgid "Enable it on the General Settings page"
+msgstr "去「常规设置」启用服务"
+
+msgid "Start it on the General Settings page"
+msgstr "去「常规设置」启动服务"
+
+msgid "Open the Panel config block"
+msgstr "去「面板配置」块"
+
+msgid "Set ui on the Panel config block"
+msgstr "去「面板配置」块设置 ui"
+
+msgid "Set a panel directory on the Panel config block first"
+msgstr "先在「面板配置」块里指定面板目录"
+
+msgid "The panel files are maintained elsewhere. Updating replaces the contents of the directory with the official release after a confirmation. Set ui on the Panel config block to the absolute path of the directory, with a readable index.html in it and the fonts in a fonts subdirectory next to it."
+msgstr "面板文件由其他地方维护。更新会在确认后用官方 release 覆盖该目录的内容。在「面板配置」块里把 ui 设为面板目录的绝对路径，目录内需有可读的 index.html，字体放在同级的 fonts 子目录。"
+
+msgid "Config Block Path"
+msgstr "配置块路径"

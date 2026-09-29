@@ -1,0 +1,10 @@
+version: 2
+updates:
+  # 跟踪 GitHub Actions 版本（含已被 pin 成 commit SHA 的引用会同步更新 SHA 与版本注释）
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
