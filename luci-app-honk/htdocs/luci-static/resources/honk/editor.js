@@ -599,9 +599,12 @@ function editorPage(opts) {
 					/* 配置块：下拉 + 该块的描述（描述随块变，编辑器区不再重复） */
 					var blockSel = E('select', { 'class': 'cbi-input-select' },
 						blocks.map(function(b) {
-							return E('option', { 'value': b.key, 'selected': b.key === current.key },
-								_(b.editorTitle));
+							return E('option', { 'value': b.key }, _(b.editorTitle));
 						}));
+
+					/* 选中态只能构造后赋值：dom.attr() 只跳过 null，false 同样走 setAttribute，
+					   `selected="false"` 属性存在即选中，多选项时取最后一个 */
+					blockSel.value = current.key;
 
 					var blockDesc = E('div', { 'class': 'cbi-value-description' }, current.description);
 
