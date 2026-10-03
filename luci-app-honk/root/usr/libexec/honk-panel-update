@@ -194,7 +194,7 @@ UI="${UI%/}"
 
 case "$UI" in
 	'') fail no_dir "api.dae 的 native_api.ui 为空，先在 API 设置里指定面板目录" ;;
-	embedded) fail embedded "ui 为 embedded，当前二进制不含 native-ui；请在 API 设置里改为目录路径" ;;
+	embedded) fail embedded "内嵌面板由核心自带，本页的在线更新只作用于目录形式；如需在线更新请在 API 设置里填目录路径" ;;
 	/*) ;;
 	*) fail bad_dir "ui 不是绝对路径（$UI），相对路径的解析依赖运行目录，请改写为绝对路径" ;;
 esac

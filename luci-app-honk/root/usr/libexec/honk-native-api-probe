@@ -99,9 +99,19 @@ fi
 port="${listen##*:}"
 url="http://127.0.0.1:$port/ui/"
 
+# 面板的提供方式：embedded 与目录模式都由 honk 在 /ui/ 提供（native_api/ui.rs 里
+# `/ui` 先 302 到 `/ui/`，再按 Ui::Embedded 走内嵌资源），所以探测不区分模式 ——
+# 探得到就说明这一份核心真的在提供面板。
+case "$ui" in
+	'') ui_kind=unset ;;
+	embedded) ui_kind=embedded ;;
+	/*) ui_kind=dir ;;
+	*) ui_kind=relative ;;
+esac
+
 reachable=false
 
-if [ "$enabled" = "true" ] && [ -n "$ui" ] && [ "$ui" != "embedded" ]; then
+if [ "$enabled" = "true" ] && [ -n "$ui" ]; then
 	[ -n "$(fetch "$url")" ] && reachable=true
 fi
 
@@ -117,6 +127,16 @@ for d in /proc/[0-9]*; do
 		break
 	fi
 done
+
+# ---- 内嵌面板的"版本"= 核心自己的构建号 ----
+# 内嵌面板没有 .honk-panel.json，版本从日志首行的 `honk-core <tag> starting` 取
+# （本仓库 init 每次启动轮转日志，所以首行就在里面）。取不到留空，页面显示"版本未知"。
+# 日志路径取本仓库随包的默认值；配置里改过 global.log_file 时这里取不到，属预期回退。
+core_version=""
+HONK_LOG=/var/log/honk/honk.log
+if [ -r "$HONK_LOG" ]; then
+	core_version=$(sed -n 's/.*honk-core \([^ ]*\) starting.*/\1/p' "$HONK_LOG" 2>/dev/null | head -n 1)
+fi
 
 # ---- 面板目录：只处理绝对路径（相对路径交由页面提示改写）----
 dir=""
@@ -157,10 +177,10 @@ if [ "$absolute" = true ] && [ "$dir" != "/" ]; then
 	fi
 fi
 
-printf '{"configured":{"present":%s,"enabled":%s,"block_present":%s,"listen":"%s","ui":"%s","secret_configured":%s,"allow_origins":%s,"allowed_hosts":%s},' \
-	"$present" "$enabled" "$block_present" "$(esc "$listen")" "$(esc "$ui")" "$secret_set" "$(list_json allow_origins)" "$(list_json allowed_hosts)"
+printf '{"configured":{"present":%s,"enabled":%s,"block_present":%s,"listen":"%s","ui":"%s","ui_kind":"%s","secret_configured":%s,"allow_origins":%s,"allowed_hosts":%s},' \
+	"$present" "$enabled" "$block_present" "$(esc "$listen")" "$(esc "$ui")" "$(esc "$ui_kind")" "$secret_set" "$(list_json allow_origins)" "$(list_json allowed_hosts)"
 
-printf '"service":{"running":%s},' "$running"
+printf '"service":{"running":%s,"core_version":"%s"},' "$running" "$(esc "$core_version")"
 
 printf '"probe":{"reachable":%s},' "$reachable"
 

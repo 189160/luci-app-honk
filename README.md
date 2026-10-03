@@ -53,7 +53,16 @@ uci set honk.config.enabled=1 && uci commit honk
 ```
 
 > [!IMPORTANT]
-> 上游预编译核心不含 `native_api`（`experimental` 段对未知子块直接报错；`udp_nfqueue` 已移至 `global.nfqueue_enable`，保留为迁移兼容用），所以随包 `/etc/honk/config.d/api.dae` 的该段默认整段注释、默认配置可直接启动。使用 doona 控制面板需两步：把核心换成带 native-api 的构建（[`Glassyiris/honk` releases](https://github.com/Glassyiris/honk/releases) 的 `honk-core-debug-<架构>-unknown-linux-musl[-stock].tar.gz`，两个变体都含 native-api，`-stock` 表示改用系统 malloc；解出的 `honk-core` 放到 `/usr/bin/honk-core`），再在 `api.dae` 里取消该段注释并填好 `secret` 与 `ui`。
+> 上游预编译核心不含 `native_api`（`experimental` 段对未知子块直接报错），所以随包 `/etc/honk/config.d/api.dae` 的该段默认整段注释、默认配置可直接启动。使用 doona 控制面板需要换成带该功能的构建，并在 `api.dae` 里取消注释、填好 `secret` 与 `ui`。
+>
+> 核心取自 [`Glassyiris/honk` releases](https://github.com/Glassyiris/honk/releases) 的 `honk-core-debug-<架构>-unknown-linux-musl[-stock].tar.gz`（`-stock` 表示改用系统 malloc），解出的 `honk-core` 放到 `/usr/bin/honk-core`。**产物包含哪些 cargo feature 由该分支的 `release.yml` 决定，会随上游调整**：2026-09-29 的构建为 `clash-api,ebpf,rprx,native-api`（无内嵌面板），2026-10-03 起为 `clash-api,ebpf,rprx,native-ui`（`native-ui` 传递包含 `native-api`）。两种情况都能用，差别在面板形态：
+>
+> | `api.dae` 的 `ui` | 面板形态 | 依赖 |
+> | :--- | :--- | :--- |
+> | `'<目录绝对路径>'` | 目录形式，由本仓「面板」页在线更新 | 目标目录存在且含可读 `index.html` |
+> | `'embedded'` | 内嵌形式，构建时把钉住的 doona 发行版嵌进核心 —— 升级核心即升级面板，不经本页更新 | 核心带 `native-ui` feature |
+>
+> 内嵌形式在核心不含 `native-ui` 时会**启动失败**并报 `embedded native UI requires the native-ui feature`；换核心后对照日志首行（`honk-core <tag> starting`）与该句即可判断，落到这种情况就把 `ui` 改回目录形式。需要自行构建时用 `.github/workflows/build-honk-native-api.yml`，其中 `ref` 钉 commit、`features` 决定是否内嵌面板（写 `native-api,native-ui`）。「面板」页的状态行会实时探测 `/ui/`，两种形态的可用性都以该探测结果为准。
 
 ## LuCI 界面
 
@@ -61,7 +70,7 @@ uci set honk.config.enabled=1 && uci commit honk
 
 - **常规设置**：顶部是运行状态卡片（每 3 秒刷新），下面一张卡片里依次是 uci 启用开关、**配置块**下拉、编辑器，底部为 Save / Save & Apply / Reset。编辑器带 CodeMirror `.dae` 语法高亮、代码折叠、括号匹配与自动补全、当前行高亮，右上角为「格式化代码」。配置块下拉承载五个块的整文件编辑（全局 / 解析 / 节点 / 路由 / 面板），切换时编辑器的标题、该块的描述、右侧的服务动作按钮一起变。
 - **日志**：读取 `/var/log/honk/honk.log`，每次启动轮转并保留 3 代；重启后文件先为空，honk 写出日志后页面自动刷新。
-- **面板**：面板状态与在线更新。地址按访问方式（IP / 主机名 / 域名）推导；面板版本与目录内标记一致时跳过更新；需要强制重下时执行 `/usr/libexec/honk-panel-update --action update --force`（页面按钮不提供 `--force`）。面板不可用时，页面上给出原因与一条「去哪修」链接 —— 跳到常规设置页并选中对应配置块，与 `ui` 相关的两类会再定位到该字段那一行。
+- **面板**：面板状态与在线更新。地址按访问方式（IP / 主机名 / 域名）推导；面板版本与目录内标记一致时跳过更新；需要强制重下时执行 `/usr/libexec/honk-panel-update --action update --force`（页面按钮不提供 `--force`）。面板形态由 `api.dae` 的 `ui` 决定：目录形式的状态行显示目录与面板版本，由本页在线更新；内嵌形式显示「内嵌面板（由核心提供）」与核心构建号，在线更新不适用。可用性一律以本机对 `/ui/` 的探测结果为准。面板不可用时，页面上给出原因与一条「去哪修」链接 —— 跳到常规设置页并选中对应配置块，与 `ui` 相关的两类会再定位到该字段那一行。
 
 **保存与生效是刻意的两步**，不是一次操作：
 

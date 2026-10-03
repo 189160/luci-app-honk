@@ -7,22 +7,29 @@
 # 写进主 config.dae 会让主文件只读，连带面板的节点/分组管理失效。
 #
 # 认证三选一：非空 secret（token）／password_auth: true（密码）／allow_anonymous_loopback: true
-# （loopback、开发用）；secret 须为不含空白与逗号的可见 ASCII，短于 8 字节不会被遮蔽。
+# （loopback、开发用）；secret 须为不含空白与逗号的可见 ASCII，短于 8 字节不会被遮蔽（启动时会记录提示）。
+#
+# ⚠️ secret 的字符序列**不能出现在任何配置源的文件正文里**（订阅 URL、注释里都算）：
+#    honk 用它做整份正文的子串匹配来判定"凭据源"，命中的那个文件会连同里面的节点/分组
+#    一起变成只读（面板改不动，报权限不足）。选一个不会在正文里出现的随机串，例如
+#    `head -c 24 /dev/urandom | base64 | tr -d '=+/' | cut -c1-24`。
 #
 # experimental {
 #     native_api {
 #         enabled: false                 # 改成 true 才启动监听（要求 listen 为数字 IP + 非 0 端口，且已有凭据）
 #         listen: '127.0.0.1:9527'       # 只接受数字 IP:port；从 LAN 访问改成 '0.0.0.0:9527'
 #         secret: ''                     # 填一个 ≥8 字节的随机串
-#         ui: '/usr/share/honk/doona'    # 面板目录的**绝对路径**；'embedded' 需要 native-ui feature（现成二进制都没有）
+#         ui: '/usr/share/honk/doona'    # 面板目录的**绝对路径**，或 'embedded'（面板由核心自带）
 #         # config_write: true           # 允许 doona 面板改写**其它**配置文件（要求 secret 非空）
-#         # allowed_hosts: 'panel.example'              # 显式 host，不能带 scheme、不能用通配符
+#         # allowed_hosts: 'panel.example'              # 显式 host authority；不能带 scheme/路径/通配符；
+#         #                                            #   省略端口表示 80，不是监听端口
 #         # allow_origins: 'https://panel.example'      # 显式 origin，不能带路径
 #         # record_flows: true           # record_traffic / record_memory / record_logs / record_dns_log 同理（默认全 true）
-#         # probe_allowed_cidrs: '192.168.0.0/16'       # 显式 IP CIDR
-#         # probe_allowed_ports: 443                    # 1..65535
-#         # geosite_download_url: 'https://example.com/geosite.dat'   # 无凭据、无 fragment 的 http(s) URL
-#         # geoip_download_url: 'https://example.com/geoip.dat'
+#         # —— 下面四个字段上游已移除或已迁移：旧构建里可用，新构建只给一条诊断并忽略其值 ——
+#         # probe_allowed_cidrs: '192.168.0.0/16'       # 【已移除】探针不再有地址白名单
+#         # probe_allowed_ports: 443                    # 【已移除】探针不再有端口白名单
+#         # geosite_download_url: 'https://example.com/geosite.dat'   # 【已迁移】→ assets.geodata.geosite
+#         # geoip_download_url: 'https://example.com/geoip.dat'       # 【已迁移】→ assets.geodata.geoip
 #         # —— 以下两个是「接受但无效」的遗留字段，写与不写完全一样 ——
 #         # config_content: true         # 读配置内容本来就不需要开关：任何通过认证的请求都可读，
 #         #                              #   只有监听凭据值会被遮蔽。此字段解析后即被丢弃。
@@ -32,3 +39,11 @@
 #
 # 提示：allowed_hosts 只写对外域名时，本机探测会因 Host 校验被拒，面板会显示「本机探测无响应」；
 #       把 '127.0.0.1:9527' 一并列入即可。
+# 提示：ui 写 'embedded' 要求核心带 native-ui feature —— 不带该 feature 的核心会以
+#       「embedded native UI requires the native-ui feature」启动失败。两种形式（目录 / embedded）
+#       都由 honk 在 /ui/ 提供，面板页的探测对这二者一视同仁。
+# 提示：geodata 的三个旧字段已迁到顶层 assets 段：geosite_download_url → assets.geodata.geosite、
+#       geoip_download_url → assets.geodata.geoip、geodata_download_detour → assets.geodata.route。
+# 提示：native_api 的未知字段会直接报错（不是忽略）；只有上面标注【已移除】【已迁移】的那几个
+#       例外 —— 它们被识别为遗留字段，给一条 warning 后忽略其值。
+#       字段清单以分支文档 doc/zh/reference/experimental.md 为准（该分支同时提供 assets/api/cli 等中文参考）。

@@ -126,6 +126,9 @@ msgstr "自定义"
 msgid "Doona (default)"
 msgstr "Doona（默认）"
 
+msgid "Embedded panel (served by the core)"
+msgstr "内嵌面板（由核心提供）"
+
 msgid "Extracting the archive failed"
 msgstr "解压失败"
 
@@ -207,11 +210,14 @@ msgstr "面板目录不是本页安装的"
 msgid "The panel is fetched from the official release, verified against SHA256SUMS and unpacked over the panel directory. That directory comes from ui in the honk configuration and has to be writable."
 msgstr "面板取自官方 release，经 SHA256SUMS 校验后解压覆盖面板目录。该目录来自 honk 配置里的 ui，需要可写。"
 
+msgid "The embedded panel comes with the core and is not updated from this page."
+msgstr "内嵌面板由核心自带，不通过本页更新。"
+
+msgid "The embedded panel did not answer; the running core may lack native-ui"
+msgstr "内嵌面板未响应；当前核心可能不含 native-ui"
+
 msgid "The update failed"
 msgstr "更新失败"
-
-msgid "This build does not embed the panel"
-msgstr "当前二进制不含内嵌面板"
 
 msgid "Unable to determine the latest release"
 msgstr "无法取得最新 release 版本号"
@@ -260,9 +266,6 @@ msgstr "按 listen 推导（回环地址，只能在路由器本机打开）"
 
 msgid "ui is not an absolute path"
 msgstr "ui 不是绝对路径"
-
-msgid "ui is set to embedded, which this build does not provide"
-msgstr "ui 为 embedded，当前二进制不含内嵌面板"
 
 msgid "unset"
 msgstr "未设置"

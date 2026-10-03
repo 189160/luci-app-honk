@@ -36,7 +36,7 @@ var STAGE_TEXT = {
 /* 错误码 → 页面文案（脚本里那份 message 是给命令行看的） */
 var ERRORS = {
 	no_dir: _('No panel directory is configured'),
-	embedded: _('This build does not embed the panel'),
+	embedded: _('The embedded panel comes with the core and is not updated from this page.'),
 	bad_dir: _('The configured panel directory is not a usable absolute path'),
 	tag_failed: _('Unable to determine the latest release'),
 	no_space: _('Not enough free space'),
@@ -260,6 +260,15 @@ function panelUrl(cfg) {
 	};
 }
 
+/* 内嵌面板判据：优先用探测给的 ui_kind，旧探测没有该字段时退回比较 ui 字符串。
+   embedded 与目录模式都由 honk 在 /ui/ 提供，所以"能不能用"一律以探测结果为准，
+   不再假定某个构建里一定没有内嵌面板。 */
+function isEmbedded(cfg) {
+	cfg = cfg || {};
+
+	return cfg.ui_kind === 'embedded' || (cfg.ui_kind == null && cfg.ui === 'embedded');
+}
+
 /* 面板没在服务的第一个原因，正常时返回 null（不看本机探测：Host 校验会造成误报） */
 function issue(data) {
 	var cfg = (data && data.configured) || {};
@@ -281,9 +290,21 @@ function issue(data) {
 		return { text: _('The native API listener is disabled'), page: 'api',
 			link: _('Open the Panel config block') };
 
-	if (cfg.ui === 'embedded')
-		return { text: _('ui is set to embedded, which this build does not provide'), page: 'api',
-			field: 'ui', link: _('Set ui on the Panel config block') };
+/* 内嵌面板：可用性由探测决定（探得到 /ui/ 就说明这份核心在提供面板），
+   探不到时才回退到"服务没跑"或"核心可能不含 native-ui"这两种可解释的原因 */
+	if (isEmbedded(cfg)) {
+		if (((data || {}).probe || {}).reachable === true)
+			return null;
+
+		if (((data || {}).service || {}).running !== true)
+			return { text: _('The honk service is not running'), page: 'global',
+				link: _('Start it on the General Settings page') };
+
+		return {
+			text: _('The embedded panel did not answer; the running core may lack native-ui'),
+			page: 'api', field: 'ui', link: _('Open the Panel config block')
+		};
+	}
 
 	if (!panel.absolute)
 		return { text: _('ui is not an absolute path'), page: 'api',
@@ -423,9 +444,16 @@ return view.extend({
 				E('strong', {}, '%s %s'.format(name, running ? _('RUNNING') : _('NOT RUNNING')))
 			]);
 
+			/* 内嵌模式没有面板目录，版本改取核心自己的构建号（探测从日志首行取得） */
+			var embedded = isEmbedded((data || {}).configured || {});
+			var version = embedded
+				? (((data || {}).service || {}).core_version || '')
+				: (panel.version || '');
+
 			var facts = [
-				_('Panel directory %s').format(panel.dir || _('unset')),
-				panel.version ? _('Version %s').format(panel.version) : _('Version unknown')
+				embedded ? _('Embedded panel (served by the core)')
+					: _('Panel directory %s').format(panel.dir || _('unset')),
+				version ? _('Version %s').format(version) : _('Version unknown')
 			];
 
 			if (bad) {
@@ -468,17 +496,23 @@ return view.extend({
 		}
 
 		function renderHint() {
-			dom.content(hintNode, source === 'doona'
-				? _('The panel is fetched from the official release, verified against SHA256SUMS and unpacked over the panel directory. That directory comes from ui in the honk configuration and has to be writable.')
-				: _('The panel files are maintained elsewhere. Updating replaces the contents of the directory with the official release after a confirmation. Set ui on the Panel config block to the absolute path of the directory, with a readable index.html in it and the fonts in a fonts subdirectory next to it.'));
+			dom.content(hintNode, isEmbedded((data || {}).configured || {})
+				? _('The embedded panel comes with the core and is not updated from this page.')
+				: (source === 'doona'
+					? _('The panel is fetched from the official release, verified against SHA256SUMS and unpacked over the panel directory. That directory comes from ui in the honk configuration and has to be writable.')
+					: _('The panel files are maintained elsewhere. Updating replaces the contents of the directory with the official release after a confirmation. Set ui on the Panel config block to the absolute path of the directory, with a readable index.html in it and the fonts in a fonts subdirectory next to it.')));
 		}
 
 		function renderButtons() {
 			var panel = (data || {}).panel || {};
 			var canUpdate = !!data && panel.absolute === true;
+			var embedded = isEmbedded((data || {}).configured || {});
 
 			updateBtn.disabled = busy || !canUpdate;
-			updateBtn.title = canUpdate ? '' : _('Set a panel directory on the Panel config block first');
+			updateBtn.title = canUpdate ? ''
+				: (embedded
+					? _('The embedded panel comes with the core and is not updated from this page.')
+					: _('Set a panel directory on the Panel config block first'));
 			updateBtn.textContent = busy ? _('Updating...') : _('Update Panel');
 
 			refreshBtn.disabled = busy;
