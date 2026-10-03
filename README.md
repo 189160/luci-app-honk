@@ -23,7 +23,9 @@ curl -fsSL "https://raw.githubusercontent.com/189160/luci-app-honk/main/Auto_Ins
 
 无参数时安装 `honk` + `luci-app-honk` + 中文语言包；`sh -s honk` 安装核心包，不含界面与语言包。脚本从 Release 取 `SHA256SUMS` 校验 apk，安装后自动补齐 geo 数据、建立软链并刷新 LuCI 缓存。
 
-脚本参数（见 `-h`）：`--repo <OWNER/REPO>`（或环境变量 `REPO`）、`--no-proxy`（关闭 GitHub 加速，直连下载）、`--gh-proxy [URL]`（加速前缀，默认 `https://ghfast.top`，或 `GH_PROXY`）、`--force`（版本相同时也强制重装）。
+脚本参数（见 `-h`）：`--repo <OWNER/REPO>`（或环境变量 `REPO`）、`--no-proxy`（关闭 GitHub 加速，直连下载）、`--gh-proxy [URL]`（加速前缀，默认 `https://ghfast.top`，或 `GH_PROXY`）、`--force`（版本相同时也强制重装）、`--keep-core` / `--replace-core`（见下）。
+
+用 doona 面板的设备（`/etc/honk/` 下有生效中的 `native_api` 块）装核心前会先过一道自检：`/etc/honk/` 是本包的 conffile，升级保留用户改过的 `api.dae`，而随包核心来自上游预编译产物、不含 `native_api` —— 两者相遇会让 honk 启动失败。此时脚本中止并给出两条走法：`--keep-core` 跳过 `honk` 包、保留当前 `/usr/bin/honk-core`（只升级界面与语言包），或 `--replace-core` 确认覆盖核心。检测会剥掉注释，整段注释掉的 `native_api` 不触发。
 
 ### 手动安装与启用
 
@@ -63,6 +65,8 @@ uci set honk.config.enabled=1 && uci commit honk
 > | `'embedded'` | 内嵌形式，构建时把钉住的 doona 发行版嵌进核心 —— 升级核心即升级面板，不经本页更新 | 核心带 `native-ui` feature |
 >
 > 内嵌形式在核心不含 `native-ui` 时会**启动失败**并报 `embedded native UI requires the native-ui feature`；换核心后对照日志首行（`honk-core <tag> starting`）与该句即可判断，落到这种情况就把 `ui` 改回目录形式。需要自行构建时用 `.github/workflows/build-honk-native-api.yml`，其中 `ref` 钉 commit、`features` 决定是否内嵌面板（写 `native-api,native-ui`）。「面板」页的状态行会实时探测 `/ui/`，两种形态的可用性都以该探测结果为准。
+>
+> ⚠️ 升级与重装会替换 `/usr/bin/honk-core`，而 `/etc/honk/` 作为 conffile 保留用户改过的 `api.dae` —— 换成不含 `native_api` 的核心后 honk 会启动失败。一键脚本对此有自检与 `--keep-core` 出口，见「安装 → 一键安装」。
 
 ## LuCI 界面
 
