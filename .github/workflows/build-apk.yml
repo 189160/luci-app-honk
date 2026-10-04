@@ -172,6 +172,22 @@ jobs:
           for f in "${apks[@]}"; do
             echo "    $(basename "$f")  $(( $(stat -c%s "$f") / 1024 )) KB"
           done
+          # 仅断言「至少一个 apk」不足：两个 luci 包可让断言通过，而发布主体
+          # honk-*.apk 缺失被放过。核心包必须存在，否则响亮失败（编译阶段被
+          # IGNORE_ERRORS 吞掉是常见成因）。
+          # packages 输入可只含界面包，该路径不产出核心包，故不要求
+          # 匹配用两侧空格：grep -w 会因 - 是词边界而把 luci-app-honk 判成含 honk
+          if [[ " ${{ needs.prepare.outputs.packages }} " == *" honk "* ]]; then
+            cores=(bin/packages/${{ matrix.arch }}/packages_ci/honk-*.apk)
+            [ "${#cores[@]}" -gt 0 ] || {
+              echo "::error::核心包 honk-*.apk 未产出，终止发布（可能编译阶段失败被 IGNORE_ERRORS 吞掉）"
+              exit 1
+            }
+            echo "✓ 核心包 ${#cores[@]} 个："
+            for f in "${cores[@]}"; do
+              echo "    $(basename "$f")  $(( $(stat -c%s "$f") / 1024 )) KB"
+            done
+          fi
           if [ "$found" -ne 0 ]; then
             echo "包依赖里仍有 vmlinux-btf，终止发布"
             exit 1

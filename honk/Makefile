@@ -4,7 +4,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=honk
 PKG_VERSION:=2026.10.4_beta3
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 # 核心来源：Glassyiris/honk（honk fork）的 release 资产。该构建带 native-api 与内嵌面板
 # （cargo feature 含 native-ui），因此 `ui: 'embedded'` 与目录形式都可用。
@@ -74,12 +74,8 @@ define Build/Compile
 endef
 
 define Package/honk/install
-	# 该 install 定义在 OpenWrt 下是**单次 shell 调用**（package-pack.mk 里
-	# `$(call Package/honk/install,$$(IDIR))` 位于同一条 recipe 行，展开出的多行
-	# 作为一个 `sh -c` 脚本执行）⇒ 不加 set -e 时退出码只看**最后一条**命令，
-	# 前面任一条失败都会被掩蔽。而 `doona/LICENSES/*.txt` 是 recipe 的非末行：
-	# 上游若删/改该目录，通配不展开会让 install 非零却被吞掉，结果是**静默少装**
-	# 那批许可文件。故首行 set -e（任一条失败即中止），末行仍保留顶层 LICENSE 作双保险。
+	# package-pack.mk 把本定义展开为单条 recipe 行、由单个 sh -c 执行：退出码取自
+	# 最后一条命令，前面的失败会被掩蔽。首行 set -e 与之对冲。
 	set -e
 	$(INSTALL_DIR) $(1)/usr/bin
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/honk-core $(1)/usr/bin/honk-core
