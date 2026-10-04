@@ -1,7 +1,7 @@
-# native_api 配置参考（native-api 分支专属；上游预编译核心不含此功能）
+# native_api 配置参考（随包核心含 native_api 与内嵌面板）
 #
-# 整段保持注释：experimental 段对未知子块直接报错，预编译核心不认识 native_api，
-# 取消注释又没换核心会让 honk 启动失败（换核心见 README）。
+# 整段保持注释：默认不启动监听（enabled: false）；
+# 要启用就取消注释，并填好 secret（以及 listen / ui 等需要改的字段），不必更换核心。
 # 下列字段改动一律要重启生效（SIGHUP 会忽略这些变更并保留当前 listener，不是报错）。
 # 本文件含 secret ⇒ 会被 honk 判为凭据源而在面板里只读；这也是它独立成文件的原因：
 # 写进主 config.dae 会让主文件只读，连带面板的节点/分组管理失效。
@@ -19,7 +19,9 @@
 #         enabled: false                 # 改成 true 才启动监听（要求 listen 为数字 IP + 非 0 端口，且已有凭据）
 #         listen: '127.0.0.1:9527'       # 只接受数字 IP:port；从 LAN 访问改成 '0.0.0.0:9527'
 #         secret: ''                     # 填一个 ≥8 字节的随机串
-#         ui: '/usr/share/honk/doona'    # 面板目录的**绝对路径**，或 'embedded'（面板由核心自带）
+#         # 推荐 'embedded'：面板由核心自带、随核心升级，不存在与核心的两代错配
+#         ui: 'embedded'
+#         # ui: '/usr/share/honk/doona'    # 或填面板目录的**绝对路径**，由「面板」页在线更新（见文末提示）
 #         # config_write: true           # 允许 doona 面板改写**其它**配置文件（要求 secret 非空）
 #         # allowed_hosts: 'panel.example'              # 显式 host authority；不能带 scheme/路径/通配符；
 #         #                                            #   省略端口表示 80，不是监听端口
@@ -39,9 +41,10 @@
 #
 # 提示：allowed_hosts 只写对外域名时，本机探测会因 Host 校验被拒，面板会显示「本机探测无响应」；
 #       把 '127.0.0.1:9527' 一并列入即可。
-# 提示：ui 写 'embedded' 要求核心带 native-ui feature —— 不带该 feature 的核心会以
-#       「embedded native UI requires the native-ui feature」启动失败。两种形式（目录 / embedded）
-#       都由 honk 在 /ui/ 提供，面板页的探测对这二者一视同仁。
+# 提示：ui 可取 'embedded'（推荐 —— 面板由核心自带，随核心升级；要求核心带 native-ui feature，随包核心含），
+#       或面板目录的**绝对路径**（由本仓「面板」页在线更新）。随包核心取 fork 的最新 release，而「面板」页
+#       跟随 doona 的最新 release ⇒ 目录形式下二者不同步，面板会长期落后核心一代；'embedded' 不存在该问题。
+#       两种形式都由 honk 在 /ui/ 提供，面板页的探测对这二者一视同仁。
 # 提示：geodata 的三个旧字段已迁到顶层 assets 段：geosite_download_url → assets.geodata.geosite、
 #       geoip_download_url → assets.geodata.geoip、geodata_download_detour → assets.geodata.route。
 # 提示：native_api 的未知字段会直接报错（不是忽略）；只有上面标注【已移除】【已迁移】的那几个

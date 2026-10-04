@@ -34,9 +34,11 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No version change."
           else
-            TAG="$(grep '^HONK_RELEASE_TAG:=' honk/Makefile | cut -d= -f2)"
+            TAG="$(grep '^FORK_RELEASE_TAG:=' honk/Makefile | cut -d= -f2)"
+            VER="$(grep '^PKG_VERSION:=' honk/Makefile | cut -d= -f2)"
+            SHA="$(grep '^HONK_COMMIT:=' honk/Makefile | cut -d= -f2 | cut -c1-12)"
             git add honk/Makefile
-            git commit -m "honk: update to ${TAG}"
+            git commit -m "honk: update to ${TAG} (${VER}, ${SHA})"
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           fi

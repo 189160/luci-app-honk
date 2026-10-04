@@ -12,13 +12,6 @@ PKGS=""
 CORE_SVC="honk"
 CORE_UPDATED=0
 
-# /etc/honk 是本包的 conffile：升级不会覆盖用户改过的 api.dae。
-# 而随包核心是上游预编译产物、不含 native_api，experimental 段对未知子块直接报错 ——
-# 于是"新核心 + 已取消注释的 api.dae"会让 honk 启动失败。装核心前按下面的自检拦一道。
-HONK_ETC="${HONK_ETC:-/etc/honk}"
-KEEP_CORE=0      # --keep-core：跳过 honk 包，保留当前的 /usr/bin/honk-core
-REPLACE_CORE=0   # --replace-core：确认要覆盖当前核心
-
 # 自愈：清理 /etc/apk/world 中遗留的裸路径条目。
 # 更早版本的脚本用 `apk add /tmp/xxx.apk` 装包，apk 会把这条文件路径原样写进 world，
 # 文件删除后每次 apk 操作都报 no such package。这里在开始前统一清除。
@@ -41,10 +34,8 @@ usage() {
   --no-proxy            关闭 GitHub 加速，直连下载
   --gh-proxy [URL]      指定 GitHub 加速前缀（默认 https://ghfast.top；也可 export GH_PROXY=...）
   --keep-dep            （已废弃，仅为兼容旧命令保留；不再拆包剔除依赖）
-  --keep-core           跳过 honk 包，保留当前的 /usr/bin/honk-core。
-                        /etc/honk 下有生效中的 native_api 块时用它：随包核心不含该功能，
-                        替换核心会让 honk 启动失败。
-  --replace-core        确认要覆盖当前核心，继续安装 honk 包
+  --keep-core           （已废除）随包核心已含 native_api，原护栏前提不再成立，识别到即报错退出
+  --replace-core        （已废除）同上
   -h, --help            显示本帮助
   <包名>...             指定要装的包，留空则装 honk + luci-app-honk + 中文语言包
                         （指定 luci-app-honk 时会自动补上 honk 与中文语言包）
@@ -79,8 +70,10 @@ while [ $# -gt 0 ]; do
         --gh-proxy)    GH_PROXY="${2:-https://ghfast.top}"; shift 2 ;;
         --gh-proxy=*)  GH_PROXY="${1#--gh-proxy=}"; shift ;;
         --keep-dep)    shift ;;   # 兼容旧命令行：vmlinux-btf 已由 CI 断言保证，无需安装时处理
-        --keep-core)   KEEP_CORE=1; shift ;;
-        --replace-core) REPLACE_CORE=1; shift ;;
+        # 已废除：随包核心现已含 native_api，原"核心不含该功能"的护栏前提不再成立。
+        # 必须显式拒绝 —— 否则会落进 *) 被当成包名，给出"未找到 --keep-core 的 apk"这类误导提示。
+        --keep-core|--replace-core)
+                       die "$1 已废除：随包核心已含 native_api，无需再保留或替换核心；去掉该参数重跑即可。" ;;
         -h|--help)     usage ;;
         *)             PKGS="$PKGS $1"; shift ;;
     esac
@@ -374,45 +367,6 @@ else
 fi
 
 if [ ! -s "$PLANFILE" ]; then die "没有可安装的包"; fi
-
-# --------------------------------------------------------- 核心替换自检
-# /etc/honk 是本包的 conffile，升级不会覆盖用户改过的 api.dae；随包核心来自上游预编译产物、
-# 不含 native_api，而 experimental 段对未知子块直接报错 ⇒ 换核心后 honk 起不来。装核心前拦一道。
-active_native_api() {
-    for f in "$HONK_ETC/config.dae" "$HONK_ETC"/config.d/*.dae; do
-        [ -r "$f" ] || continue
-        # 剥掉注释：整段被注释掉的 native_api 不算生效
-        sed -e 's/^[[:space:]]*#.*$//' -e 's/[[:space:]]#.*$//' "$f" 2>/dev/null \
-            | grep -qE '(^|[^A-Za-z_])native_api[[:space:]]*\{' && return 0
-    done
-    return 1
-}
-
-if plan_has "$CORE_SVC" && active_native_api; then
-    if [ "$KEEP_CORE" -eq 1 ]; then
-        info "检测到生效中的 native_api 配置：按 --keep-core 跳过 $CORE_SVC 包，/usr/bin/honk-core 保持不动"
-        # grep -v 在"过滤后为空"时返回 1，这里不能让它中断 mv，否则计划里会仍留着 honk
-        grep -v "|$CORE_SVC\$" "$PLANFILE" > "$PLANFILE.tmp" 2>/dev/null || true
-        mv "$PLANFILE.tmp" "$PLANFILE"
-        if [ ! -s "$PLANFILE" ]; then
-            echo "✅ 本次没有其它要装的包，配置与核心都未改动"
-            rm -f "$PLANFILE" "$DECIDED"
-            exit 0
-        fi
-    elif [ "$REPLACE_CORE" -eq 1 ]; then
-        echo "⚠ 按 --replace-core 继续：当前的 /usr/bin/honk-core 会被替换为不含 native_api 的构建，"
-        echo "  替换后需要自行换回带 native-api 的构建，面板才会恢复。"
-    else
-        echo ""
-        echo "⚠ $HONK_ETC 下有生效中的 native_api 块，而随包的 $CORE_SVC 核心来自上游预编译产物、不含该功能。"
-        echo "  experimental 段对未知子块直接报错 ⇒ 替换核心后 honk 会启动失败（procd respawn 循环）。"
-        echo "  已中止，核心与配置都未改动。两种走法："
-        echo "    · 保留当前核心，只升级界面与语言包：在本命令末尾加 --keep-core"
-        echo "    · 确认要替换核心（面板会失效，需自行换回带 native-api 的构建）：加 --replace-core"
-        rm -f "$PLANFILE" "$DECIDED"
-        exit 1
-    fi
-fi
 
 echo ""
 echo "版本检查："
