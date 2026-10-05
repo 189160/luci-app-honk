@@ -10,6 +10,8 @@ PKGS=""
 
 # 核心服务名与"本次是否更新了核心"标记（供安装后按需重启使用）
 CORE_SVC="honk"
+# 核心包名（资产名 honk-<PKG_VERSION>-<arch>.apk 的前缀；比较版本时需与已装侧的 -rN 对齐）
+CORE_PKG="honk"
 CORE_UPDATED=0
 
 # 自愈：清理 /etc/apk/world 中遗留的裸路径条目。
@@ -164,6 +166,7 @@ strip_arch_suffix() {
     printf '%s' "$v"
 }
 
+# 核心资产名是 PKG_VERSION 形态（honk-2026.10.6_beta1-x86_64.apk），界面/i18n 包仍是 x.y.z-rN
 asset_ver() {
     f=$(basename "$1")
     n="$2"
@@ -171,6 +174,10 @@ asset_ver() {
     v=${f#"$n"-}
     strip_arch_suffix "$v"
 }
+
+# 核心资产名是 PKG_VERSION 形态，而已装侧 apk 元数据是 PKG_VERSION-PKG_RELEASE
+# （2026.10.6_beta1-r1）⇒ 比较前把已装侧的 -rN 剥掉
+strip_rel() { printf '%s' "$1" | sed -E 's/-r[0-9]+$//'; }
 
 apk_installed_ver() {
     apk list --installed 2>/dev/null | awk -v p="$1-" -v a="$ARCH" '
@@ -218,10 +225,12 @@ add_i18n() {
     return 1
 }
 
-# 从 apk 文件名解析包名：luci-app-honk-2.0.0-r1.apk -> luci-app-honk
+# 从 apk 文件名解析包名：luci-app-honk-2.0.0-r1-x86_64.apk -> luci-app-honk；
+# honk-2026.10.6_beta1-x86_64.apk -> honk（同样先剥架构、再去掉末尾以数字开头的版本段）
 pkg_name_of() {
     b=$(basename "$1"); b=${b%.apk}
-    printf '%s' "$b" | sed 's/-[0-9][0-9A-Za-z._+~-]*-r[0-9][0-9A-Za-z._+~-]*$//'
+    b=$(strip_arch_suffix "$b")
+    printf '%s' "$b" | sed -E 's/-[0-9][0-9A-Za-z._+~-]*$//'
 }
 
 # 把 apk 安装本地文件时写入的 "包名><身份哈希" 规范化为纯包名。
@@ -375,6 +384,11 @@ while IFS='|' read -r u n; do
     [ -n "$u" ] || continue
     newv=$(asset_ver "$u" "$n")
     oldv=$(apk_installed_ver "$n")
+    # 核心资产名是 PKG_VERSION 形态，已装侧带 -rN ⇒ 只剥已装侧。
+    # 取舍：上游同一天重打 tag（PKG_RELEASE 变、PKG_VERSION 不变）不触发升级。
+    if [ "$n" = "$CORE_PKG" ]; then
+        oldv=$(strip_rel "$oldv")
+    fi
     if [ -n "$oldv" ] && [ "$(norm_ver "$oldv")" = "$(norm_ver "$newv")" ] && [ "$FORCE" -eq 0 ]; then
         echo "  · $n  $oldv == $newv  已是最新，跳过"
         # 已安装却可能不在 /etc/apk/world（旧版本脚本曾整行删除 world 条目）：补登记回去。

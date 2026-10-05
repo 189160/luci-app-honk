@@ -52,6 +52,7 @@ jobs:
       sdk: ${{ steps.meta.outputs.sdk }}
       packages: ${{ steps.meta.outputs.packages }}
       luci_version: ${{ steps.meta.outputs.luci_version }}
+      pkg_version: ${{ steps.meta.outputs.pkg_version }}
       source_tag: ${{ steps.meta.outputs.source_tag }}
       should_build: ${{ steps.guard.outputs.should_build }}
     steps:
@@ -70,6 +71,7 @@ jobs:
 
           version="${pkg_version}-r${pkg_release}"
           echo "version=${version}"                >> "$GITHUB_OUTPUT"
+          echo "pkg_version=${pkg_version}"        >> "$GITHUB_OUTPUT"
           rel_date=$(date -u +%Y.%m.%d)
           echo "release_tag=honk_${rel_date}"       >> "$GITHUB_OUTPUT"
           echo "release_name=honk_${rel_date}"      >> "$GITHUB_OUTPUT"
@@ -96,6 +98,7 @@ jobs:
         run: |
           set -euo pipefail
           ver="${{ steps.meta.outputs.version }}"
+          src="${{ steps.meta.outputs.source_tag }}"
           luci="${{ steps.meta.outputs.luci_version }}"
           if [ "${{ inputs.force }}" = "true" ]; then
             echo "手动强制构建（force=true）"
@@ -107,11 +110,11 @@ jobs:
           if [ -n "$latest_tag" ]; then
             last=$(gh release view "$latest_tag" --repo "$GITHUB_REPOSITORY" --json body --jq '.body // ""' || echo "")
           fi
-          if printf '%s' "$last" | grep -q "version:${ver}" && printf '%s' "$last" | grep -q "luci:${luci}"; then
-            echo "无变化（core ${ver} / luci ${luci} 与最近一次 Release 相同）：跳过编译与发布"
+          if printf '%s' "$last" | grep -qF "source:${src}" && printf '%s' "$last" | grep -qF "luci:${luci}"; then
+            echo "无变化（source ${src} / luci ${luci} 与最近一次 Release 相同）：跳过编译与发布"
             echo "should_build=false" >> "$GITHUB_OUTPUT"
           else
-            echo "检测到变化（core ${ver} / luci ${luci}）：继续编译"
+            echo "检测到变化（source ${src} / luci ${luci}）：继续编译"
             echo "should_build=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -235,6 +238,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p rel
+          # 核心资产名用 Makefile 的 PKG_VERSION 原样（honk-2026.10.6_beta1-x86_64.apk）。不在这里
+          # 重算派生规则，避免与 scripts/update_honk_version.sh 脱钩
+          core_ver="${{ needs.prepare.outputs.pkg_version }}"
+          if [ -z "$core_ver" ]; then
+            echo "::error::prepare 未提供 pkg_version，核心资产名无法生成"
+            exit 1
+          fi
+          echo "core asset version: ${core_ver}"
           for d in release-dist/*/; do
             label="${d#release-dist/}"
             label="${label%/}"
@@ -244,7 +255,7 @@ jobs:
               name=$(basename "$f")
               case "$name" in
                 honk-*)
-                  cp "$f" "rel/${name%.apk}-${label}.apk"
+                  cp "$f" "rel/honk-${core_ver}-${label}.apk"
                   ;;
                 *)
                   [ "$label" = "x86_64" ] && cp "$f" "rel/$name"
@@ -293,9 +304,9 @@ jobs:
           title="${{ needs.prepare.outputs.release_name }}"
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$tag" rel/* --repo "$GITHUB_REPOSITORY" --clobber
-            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --notes "version:${{ needs.prepare.outputs.version }} source:${{ needs.prepare.outputs.source_tag }} luci:${{ needs.prepare.outputs.luci_version }} Automated build of ${title}"
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --notes "source:${{ needs.prepare.outputs.source_tag }} luci:${{ needs.prepare.outputs.luci_version }}"
           else
-            gh release create "$tag" rel/* --repo "$GITHUB_REPOSITORY" --title "$title" --notes "version:${{ needs.prepare.outputs.version }} source:${{ needs.prepare.outputs.source_tag }} luci:${{ needs.prepare.outputs.luci_version }} Automated build of ${title}"
+            gh release create "$tag" rel/* --repo "$GITHUB_REPOSITORY" --title "$title" --notes "source:${{ needs.prepare.outputs.source_tag }} luci:${{ needs.prepare.outputs.luci_version }}"
           fi
 
       - name: Delete old releases
