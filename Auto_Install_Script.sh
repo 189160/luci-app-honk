@@ -384,10 +384,10 @@ while IFS='|' read -r u n; do
     [ -n "$u" ] || continue
     newv=$(asset_ver "$u" "$n")
     oldv=$(apk_installed_ver "$n")
-    # 核心资产名是 PKG_VERSION 形态，已装侧带 -rN ⇒ 只剥已装侧。
-    # 取舍：上游同一天重打 tag（PKG_RELEASE 变、PKG_VERSION 不变）不触发升级。
+    # 核心资产名是 PKG_VERSION 形态，已装侧 apk 元数据是 PKG_VERSION-PKG_RELEASE ⇒ 两侧都剥 -rN。
+    # 两侧都剥是为了兼容「资产名仍带 -rN」的既发 Release（改名只对之后发布的资产生效）。
     if [ "$n" = "$CORE_PKG" ]; then
-        oldv=$(strip_rel "$oldv")
+        newv=$(strip_rel "$newv"); oldv=$(strip_rel "$oldv")
     fi
     if [ -n "$oldv" ] && [ "$(norm_ver "$oldv")" = "$(norm_ver "$newv")" ] && [ "$FORCE" -eq 0 ]; then
         echo "  · $n  $oldv == $newv  已是最新，跳过"
