@@ -52,6 +52,7 @@ jobs:
       sdk: ${{ steps.meta.outputs.sdk }}
       packages: ${{ steps.meta.outputs.packages }}
       luci_version: ${{ steps.meta.outputs.luci_version }}
+      source_tag: ${{ steps.meta.outputs.source_tag }}
       should_build: ${{ steps.guard.outputs.should_build }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -76,8 +77,16 @@ jobs:
           echo "packages=${packages}"              >> "$GITHUB_OUTPUT"
           luci_version="$(grep '^PKG_VERSION:=' luci-app-honk/Makefile | head -n 1 | cut -d= -f2)-r$(grep '^PKG_RELEASE:=' luci-app-honk/Makefile | head -n 1 | cut -d= -f2)"
           echo "luci_version=${luci_version}"      >> "$GITHUB_OUTPUT"
+          # 上游来源 tag：PKG_VERSION 由它派生且会丢掉 series（如 native-api），
+          # 故 notes 单独标注，让内核出处可溯源
+          source_tag=$(grep '^FORK_RELEASE_TAG:=' honk/Makefile | head -n 1 | cut -d= -f2)
+          if [ -z "$source_tag" ]; then
+            echo "::error::honk/Makefile 未定义 FORK_RELEASE_TAG，notes 无法标注上游来源"
+            exit 1
+          fi
+          echo "source_tag=${source_tag}"          >> "$GITHUB_OUTPUT"
 
-          echo "Version: ${version} / SDK: ${sdk} / Packages: ${packages}"
+          echo "Version: ${version} / Source: ${source_tag} / SDK: ${sdk} / Packages: ${packages}"
 
       - name: Change guard
         id: guard
@@ -284,9 +293,9 @@ jobs:
           title="${{ needs.prepare.outputs.release_name }}"
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$tag" rel/* --repo "$GITHUB_REPOSITORY" --clobber
-            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --notes "version:${{ needs.prepare.outputs.version }} luci:${{ needs.prepare.outputs.luci_version }} Automated build of ${title}"
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --notes "version:${{ needs.prepare.outputs.version }} source:${{ needs.prepare.outputs.source_tag }} luci:${{ needs.prepare.outputs.luci_version }} Automated build of ${title}"
           else
-            gh release create "$tag" rel/* --repo "$GITHUB_REPOSITORY" --title "$title" --notes "version:${{ needs.prepare.outputs.version }} luci:${{ needs.prepare.outputs.luci_version }} Automated build of ${title}"
+            gh release create "$tag" rel/* --repo "$GITHUB_REPOSITORY" --title "$title" --notes "version:${{ needs.prepare.outputs.version }} source:${{ needs.prepare.outputs.source_tag }} luci:${{ needs.prepare.outputs.luci_version }} Automated build of ${title}"
           fi
 
       - name: Delete old releases
