@@ -310,7 +310,8 @@ jobs:
           fi
 
       - name: Delete old releases
-        uses: ophub/delete-releases-workflows@9c4138644d440d66f145e5ab03a98f03b5cbf2b0 # main (2026-06-17；该 commit 无对应 tag，v0.1.0 更早)
+        # pin main 的具体 commit：上游没有对应 tag；Dependabot 每周前移 SHA，行尾不留注释
+        uses: ophub/delete-releases-workflows@f5873e66feb0a85460d7fbc073de6c89470e94d3
         with:
           delete_releases: true
           releases_keep_latest: 2
