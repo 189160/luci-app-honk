@@ -3,7 +3,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=honk
-PKG_VERSION:=2026.10.8_beta1
+PKG_VERSION:=2026.10.9_beta2
 PKG_RELEASE:=1
 
 # 核心来源：Glassyiris/honk（honk fork）的 release 资产。该构建带 native-api 与内嵌面板
@@ -15,14 +15,14 @@ PKG_RELEASE:=1
 # 故推荐 `ui: 'embedded'`，面板随核心字节走。
 #   FORK_RELEASE_TAG  fork release tag（拼资产 URL、并据此派生 PKG_VERSION）
 #   HONK_COMMIT       该构建的上游 commit（更新脚本判变与溯源）
-FORK_RELEASE_TAG:=debug.2026.10.8.native-api.1
-HONK_COMMIT:=6ad0ab89bfdf2a72d3e08b00714bb8434ffdc1df
+FORK_RELEASE_TAG:=debug.2026.10.9.native-api.2
+HONK_COMMIT:=eac5e0c5fba5078a7ff4517a3e3851e7fa0f4f8e
 
 # 两个 musl（非 stock）资产的 sha256。该 fork release 不公布 SHA256SUMS，故由
 # scripts/update_honk_version.sh 下载两个 musl 非 stock 资产后自行计算（PKG_HASH 会
 # 让 CI 在字节不符时 fail-loud）。x86_64 一处另有独立实下核对。
-HONK_HASH_X86_64:=6466bce9460088154234e7e38e4b979180ba77481097102b1448ea8284a09f8e
-HONK_HASH_AARCH64:=c917a18e91bd8ddb782a5d41e53944a3db78900519d24498f7e7c8e8bf0f2c5c
+HONK_HASH_X86_64:=8b5c96b70f30f914b409e9e471c47faf347e19c048d6fa7964e4fec6ca293040
+HONK_HASH_AARCH64:=1a97c7117c6d17e96c616bfce348523c000ba72d8852892d5c3af3ab29801e9c
 
 PKG_LICENSE:=GPL-3.0-only
 PKG_LICENSE_FILES:=LICENSE
