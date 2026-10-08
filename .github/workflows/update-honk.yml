@@ -2,7 +2,7 @@ name: Update honk version
 
 on:
   schedule:
-    - cron: '17 0 * * *'
+    - cron: '0 17 * * *'
   workflow_dispatch:
 
 permissions:
