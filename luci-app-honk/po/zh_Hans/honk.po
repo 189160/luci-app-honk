@@ -84,6 +84,15 @@ msgstr "无法读取 %s：%s"
 msgid "Configuration saved. Use %s to apply it."
 msgstr "配置已保存，点「%s」使其生效。"
 
+msgid "Configuration submitted. The service has been requested to restart."
+msgstr "配置已提交，已请求重启服务。"
+
+msgid "Configuration submitted. The service has been requested to stop."
+msgstr "配置已提交，已请求停止服务。"
+
+msgid "Failed to apply the configuration: %s"
+msgstr "应用配置失败：%s"
+
 msgid "Editor unavailable, plain textarea is used: %s"
 msgstr "编辑器不可用，已退回普通文本框：%s"
 

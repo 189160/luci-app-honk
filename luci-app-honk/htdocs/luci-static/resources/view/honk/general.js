@@ -48,5 +48,29 @@ return heditor.editorPage({
 	uciSection: function(section) {
 		var enable = section.option(form.Flag, 'enabled', _('Start Service'));
 		enable.rmempty = false;
+
+		/*
+		 * 控件的真假观必须与 heditor.normalizeEnabled() 一致。
+		 *
+		 * form.Flag 渲染 checkbox 时是拿 cfgvalue 与 value_enabled('1') 直接比
+		 * （form.js: render() → cfgvalue(section_id) → renderWidget → new ui.Checkbox(cfgvalue,
+		 *  { value_enabled: '1' })；ui.js: 'checked': (this.value == this.options.value_enabled)）。
+		 * 而配置里 enabled 可能是 'on'/'true'/'yes' 这类 config_get_bool 认、控件不认的值：
+		 * 那样界面显示**未勾选**，用户做任何无关编辑保存就把 fval='0' 写回，并把「没变」误判成
+		 * 「变了」而去停服务；v2 走 commit 后这个改写还会落盘成持久修改。
+		 * 归一化后：非规范值也显示为已勾选，且 fval == cval ⇒ 不写、不判变、不停服务。
+		 *
+		 * 注意 cfgvalue 同时是 getter(1 参) 与 setter(2 参)：load() 走的是 2 参 setter
+		 * （form.js 的 section.load() 里 `children[i].cfgvalue(section_id, set_values[i])`），
+		 * 必须原样转发，否则载入的值存不进去。
+		 */
+		var baseCfgvalue = form.Flag.prototype.cfgvalue;
+
+		enable.cfgvalue = function(section_id, set_value) {
+			if (arguments.length == 2)
+				return baseCfgvalue.call(this, section_id, set_value);
+
+			return heditor.normalizeEnabled(baseCfgvalue.call(this, section_id));
+		};
 	}
 });

@@ -5,6 +5,7 @@
 'require ui';
 'require dom';
 'require poll';
+'require honk.editor as heditor';
 
 /*
  * Panel —— 面板（doona）的状态与在线更新。
@@ -274,7 +275,10 @@ function issue(data) {
 	var cfg = (data && data.configured) || {};
 	var panel = (data && data.panel) || {};
 
-	if (uci.get('honk', 'config', 'enabled') !== '1')
+	/* 判「服务是否启用」必须与外壳同口径：用 heditor.normalizeEnabled（对齐 lib/functions.sh
+	   的 get_bool，大小写敏感），不用 LuCI 的 uci.get_bool —— 后者自带 toLowerCase()，
+	   会把 'ON' 判为真，而 honk.init 会把它判为未启用，两页就会各说一套。 */
+	if (heditor.normalizeEnabled(uci.get('honk', 'config', 'enabled')) !== '1')
 		return { text: _('The honk service is disabled'), page: 'global',
 			link: _('Enable it on the General Settings page') };
 

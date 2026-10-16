@@ -80,6 +80,7 @@ service_stopped() {
 }
 
 reload_service() {
+    # 必须 stop+start：stop 会摘掉 config.change 触发器（procd_kill→ubus service delete），靠 start 挂回；只 stop 则「再勾选」起不来。
     stop
     start
 }

@@ -2,6 +2,7 @@
 'require view';
 'require form';
 'require fs';
+'require uci';
 'require ui';
 'require poll';
 'require rpc';
@@ -14,6 +15,26 @@
 
 var SERVICE = 'honk';
 var INITD = '/etc/init.d/honk';
+
+/*
+ * `enabled` 的取值集合必须与外壳的 get_bool() **逐字一致**（lib/functions.sh，**大小写敏感**）：
+ *   真：1|on|true|yes|enabled   假：0|off|false|no|disabled   其余 → honk.init 的默认值 0
+ * 所以这里**不能** toLowerCase()：'ON' 在服务端落默认值（未启用），界面若当它是真，就会出现
+ * 「显示已勾选、点保存却什么都不发生、服务始终不启动」，且没有任何线索。
+ * 归一化的用途有二：让控件的真假观与外壳一致；让判变不因 '1' 与 true 这类写法差异而误报。
+ */
+function normalizeEnabled(v) {
+	switch (String(v == null ? '' : v)) {
+	case '1': case 'on': case 'true': case 'yes': case 'enabled':
+		return '1';
+	default:
+		return '0';
+	}
+}
+
+function enabledFlag() {
+	return normalizeEnabled(uci.get('honk', 'config', 'enabled'));
+}
 
 var PATHS = {
 	config: '/etc/honk/config.dae',
@@ -672,14 +693,65 @@ function editorPage(opts) {
 			return this.formMap.save();
 		},
 
+		/*
+		 * 保存并应用：
+		 *   · enabled 未变 ⇒ 与 2026-09-24 的解耦一致：只写 UCI + 原提示文案，不碰服务；
+		 *   · enabled 变了 ⇒ 必须**先提交**再谈服务。
+		 *
+		 * 为什么必须先提交：本流程此前从不 commit，而 LuCI 的 uci 调用带会话，delta 落在
+		 * /var/run/rpcd/uci-<会话>/，initscript 的 config_load 够不到它 ⇒ 无论发什么服务
+		 * 动作，honk.init 读到的都还是旧 enabled（1→0 停完又被拉起，0→1 根本不起）。
+		 *
+		 * 为什么不需要再显式 restart（加了就是重启两遍）：rpcd 的 uci apply 逐个调用
+		 * rpc_uci_apply_config()，后者先 uci_commit() 落盘、紧接着 rpc_uci_trigger_event()
+		 * 发 `service event { type: config.change, data: { package } }`；而 honk.init 的
+		 * service_triggers() 注册的正是 config.change("honk") ⇒ procd 会执行
+		 * `/etc/init.d/honk reload` ⇒ procd 版 reload() 走 reload_service() = stop; start，
+		 * 而 start_service 开头按 enabled 早退 ⇒ enabled=0 时恰好是「只停不起」。
+		 */
 		handleSaveApply: function(ev, mode) {
-/* 保存与重载解耦：重载由标题行的按钮单独触发 */
+			/*
+			 * in-flight 守卫：前一次 apply 的 confirm 还没回来时，rpcd 会**直接拒掉**第二次
+			 * apply（uci.c: `if (apply_sid[0] && rollback) return UBUS_STATUS_PERMISSION_DENIED;`），
+			 * 用户连点两次就会看到一条误导性的 "Failed to apply"，而第一次其实是成功的。
+			 * 故进行中直接忽略重复点击；这里只挡「重复」，真实失败仍照常上报、不被吞。
+			 */
+			if (this._saveApplyPending)
+				return Promise.resolve();
+
+			this._saveApplyPending = true;
+
+			var self = this;
+			var release = function() { self._saveApplyPending = false; };
+
+			var wasEnabled = enabledFlag();
+
 			return this.handleSave(ev).then(function() {
-				/* 提示里的按钮名随当前配置块变化：面板块是「立即重启」，其余是「立即重载」 */
-				ui.addNotification(null, E('p',
-					_('Configuration saved. Use %s to apply it.').format(_(current.reloadNowLabel || 'Reload Now'))),
-					'info');
-			});
+				var nowEnabled = enabledFlag();
+
+				if (wasEnabled === nowEnabled) {
+					/* 提示里的按钮名随当前配置块变化：面板块是「立即重启」，其余是「立即重载」 */
+					ui.addNotification(null, E('p',
+						_('Configuration saved. Use %s to apply it.').format(_(current.reloadNowLabel || 'Reload Now'))),
+						'info');
+					return;
+				}
+
+				return uci.apply().then(function() {
+					/* 只说**已发生的事实**：apply resolve 只代表 rpcd 已 commit 并已发出
+					 * config.change 事件，真正的 reload 由 procd 异步执行、成败不回传前端，
+					 * 所以不对"服务已起/已停"这种未观测到的结果下断言。 */
+					ui.addNotification(null, E('p',
+						nowEnabled === '1'
+							? _('Configuration submitted. The service has been requested to restart.')
+							: _('Configuration submitted. The service has been requested to stop.')),
+						'info');
+				}).catch(function(err) {
+					ui.addNotification(null, E('p',
+						_('Failed to apply the configuration: %s').format(err && err.message ? err.message : err)),
+						'error');
+				});
+			}).then(release, function(err) { release(); throw err; });
 		},
 
 		/* Reset = 放弃编辑，重新载入磁盘上的内容（CodeMirror 需同步，故自行实现） */
@@ -700,6 +772,7 @@ return baseclass.extend({
 	PATHS: PATHS,
 	SERVICE: SERVICE,
 	INITD: INITD,
+	normalizeEnabled: normalizeEnabled,
 	loadCodeMirror: loadCodeMirror,
 	attachCodeMirror: attachCodeMirror,
 	formatValue: formatValue,
