@@ -31,26 +31,32 @@ trap 'on_signal 129' HUP
 trap 'on_signal 130' INT
 trap 'on_signal 143' TERM
 
-# 核心来源与锚点仓库：honk fork 的 `debug.*` per-tag release。
-FORK_REPO="Glassyiris/honk"
+# 核心来源：上游 daeuniverse/honk 的 `v*` release（预编译资产）。
+HONK_REPO="daeuniverse/honk"
 
-# 锚点语义：取 fork 的 `debug.*` release 里版本最高的那个（fork 绝对最新）。
-# 配对代价（如实记录）：面板更新跟随 doona 最新 release、不做钉版，而核心取 fork 绝对最新
-# ⇒ 目录形式下面板会长期落后核心一代（`Invalid probe request.` 那类症状），推荐 ui: 'embedded'。
+# 候选 = 上游的 `v*` release tag（排除开发用的 `debug.*`），取版本最高的那个。
+# 上游 release 全部是 pre-release ⇒ 任何 `releases/latest` 用法都不可用，只能走 tag 列表。
 #
-# 该 release 不公布 SHA256SUMS ⇒ 两个 musl 非 stock 资产的 sha256 由本脚本下载后自算。
-# 判变键仍为 commit + 两个 musl 哈希。
+# 版本派生：取 release 的 `published_at`（UTC 日期）+ tag 尾的 beta 序数
+# ⇒ <日期>_beta<序数>；tag 无 beta 序数时为 <日期>。取不到 published_at 即 fail-loud
+# （宁可不更新，也不猜一个日期）。
+#
+# 哈希：上游 release 公布 `SHA256SUMS` ⇒ 先按它取两个 native-api 资产的 sha256，
+# 再下载两个资产做 sha256 交叉校验，任一不符即停。
+#
+# 判变：tag / 派生版本 / commit / 两个哈希（PKG_RELEASE 由它们推导，不作判变输入）。
 #
 # 测试注入点（本地固定样本；生产路径不需要）：
-#   HONK_FIXTURE_DIR   离线夹具根：candidates（fork tag 清单，每行一个）、
-#                      <tag>/<asset>（真实字节：既当"下载源"，也用于自算哈希）、<tag>/COMMIT
-#   FORK_RELEASE_TAG   显式指定 fork tag，跳过候选筛选
-# 两者都不设时，才去网上取候选与资产。
+#   HONK_FIXTURE_DIR   离线夹具根：candidates（tag 清单，每行一个）、
+#                      <tag>/COMMIT、<tag>/PUBLISHED_AT（YYYY-MM-DD）、<tag>/SHA256SUMS、
+#                      <tag>/<asset>（真实字节：既当"下载源"，也用于交叉校验）
+#   HONK_RELEASE_TAG   显式指定上游 tag，跳过候选筛选
+# 两者都不设时，才去网上取候选、元数据与资产。
 
 git_ls_remote_tags() {
     local attempt
     for attempt in 1 2 3 4 5; do
-        if git ls-remote --tags "https://github.com/${FORK_REPO}.git" 2>/dev/null; then
+        if git ls-remote --tags "https://github.com/${HONK_REPO}.git" 2>/dev/null; then
             return 0
         fi
         sleep 3
@@ -66,14 +72,29 @@ makefile_var() {
     { grep -E "^$1:=" "$MAKEFILE" 2>/dev/null || true; } | head -n 1 | cut -d= -f2-
 }
 
-# 候选 fork tag（版本序，高在前）：夹具优先，否则取远端 `debug.*` 标签。
+# 候选上游 tag（版本序，高在前）：夹具优先，否则取远端 `v*` 标签。
+# 只认语义化 `vMAJOR.MINOR.PATCH[-预发布]`，因此 `debug.*` 与其它 tag 一律排除。
 list_candidates() {
     if [ -n "${HONK_FIXTURE_DIR:-}" ]; then
         sort -Vru "${HONK_FIXTURE_DIR}/candidates" 2>/dev/null || true
         return 0
     fi
     git_ls_remote_tags | awk '{print $2}' | sed 's|refs/tags/||' \
-        | grep -v '\^{}' | grep -E '^debug\.' | sort -Vr
+        | grep -v '\^{}' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' | sort -Vr
+}
+
+# 从候选里选最高者。不能直接取 `sort -V` 的第一行：GNU version sort 把正式版排在同版本
+# 预发布版**之下**（`v0.1.0` < `v0.1.0-beta.10`），那样上游一旦发正式版就永远跟不到。
+# 故先取最高版本核心，核心内正式版优先，其次才按版本序取预发布。
+pick_highest() {
+    local core
+    core="$(printf '%s\n' "$1" | sed -nE 's/^v([0-9]+\.[0-9]+\.[0-9]+).*$/\1/p' | sort -Vr | head -n 1)"
+    [ -n "$core" ] || return 1
+    if printf '%s\n' "$1" | grep -qxF "v${core}"; then
+        printf 'v%s\n' "$core"
+        return 0
+    fi
+    printf '%s\n' "$1" | grep -E "^v${core//./\\.}-" | sort -Vr | head -n 1
 }
 
 # 临时目录基址：必须是 POSIX 形态。
@@ -110,6 +131,32 @@ fetch_commit() {
     printf '%s\n' "$c"
 }
 
+# 该 tag 的发布日（UTC 的 YYYY-MM-DD）：版本号由它派生，取不到即 fail-loud。
+# GitHub API 匿名会撞限流 ⇒ 有 GH_TOKEN / GITHUB_TOKEN 时带 Authorization 头。
+fetch_published_date() {
+    local tag="$1" api token json d
+    if [ -n "${HONK_FIXTURE_DIR:-}" ]; then
+        [ -r "${HONK_FIXTURE_DIR}/${tag}/PUBLISHED_AT" ] || return 1
+        tr -d ' \t\r\n' < "${HONK_FIXTURE_DIR}/${tag}/PUBLISHED_AT"
+        printf '\n'
+        return 0
+    fi
+    api="https://api.github.com/repos/${HONK_REPO}/releases/tags/${tag}"
+    token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+    if [ -n "$token" ]; then
+        json="$(curl -fsSL --retry 3 --connect-timeout 20 --max-time 120 \
+            -H "Authorization: Bearer ${token}" "$api" 2>/dev/null || true)"
+    else
+        json="$(curl -fsSL --retry 3 --connect-timeout 20 --max-time 120 \
+            "$api" 2>/dev/null || true)"
+    fi
+    d="$(printf '%s' "$json" \
+        | grep -oE '"published_at"[[:space:]]*:[[:space:]]*"[0-9]{4}-[0-9]{2}-[0-9]{2}' \
+        | head -n 1 | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}')"
+    [ -n "$d" ] || return 1
+    printf '%s\n' "$d"
+}
+
 # 取资产字节。夹具模式下从本地复制（同样用于自算哈希），生产路径下载。
 # 二者共用同一出口：拿不到字节即视为不可达 ⇒ 调用方 fail-safe 停止、不写盘。
 #
@@ -125,7 +172,7 @@ fetch_asset() {
         return 0
     fi
     local url want actual
-    url="https://github.com/${FORK_REPO}/releases/download/${tag}/${asset}"
+    url="https://github.com/${HONK_REPO}/releases/download/${tag}/${asset}"
     # 期望长度：HEAD 跟随重定向（-L）后取最后一跳的 Content-Length。
     want="$(curl -fsSL -I -L --retry 3 --connect-timeout 20 --max-time 120 "$url" 2>/dev/null \
         | tr -d '\r' | awk 'tolower($1)=="content-length:"{v=$2} END{print v+0}')"
@@ -146,6 +193,24 @@ fetch_asset() {
     return 0
 }
 
+# 取上游 release 的 SHA256SUMS（资产哈希的权威来源）。取不到即 fail-safe 停止、不写盘。
+fetch_sums() {
+    local tag="$1" dest="$2"
+    if [ -n "${HONK_FIXTURE_DIR:-}" ]; then
+        [ -r "${HONK_FIXTURE_DIR}/${tag}/SHA256SUMS" ] || return 1
+        cp "${HONK_FIXTURE_DIR}/${tag}/SHA256SUMS" "$dest"
+        return 0
+    fi
+    curl -fsSL --retry 3 --connect-timeout 20 --max-time 120 \
+        "https://github.com/${HONK_REPO}/releases/download/${tag}/SHA256SUMS" -o "$dest" 2>/dev/null
+}
+
+# 从 SHA256SUMS 里取某个资产的哈希。行格式为 `<sha256>  <文件名>`
+# （二进制模式会写成 `*文件名`，一并兼容）。没有该行则输出空串，由调用方 fail-loud。
+sum_for() {
+    awk -v a="$2" '($2 == a) || ($2 == "*" a) { print $1; exit }' "$1"
+}
+
 # 走 stdin：部分环境（如 Git Bash）下文件名含反斜杠时，sha256sum 会在行首加 `\` 转义，
 # 按字段切出来就带上了它；读 stdin 时输出恒为 "<hash>  -"，不受路径形态影响。
 sha256_of() {
@@ -162,45 +227,56 @@ assert_hash() {
     [ "${#h}" -eq 64 ] || { echo "error: ${name} 自算 sha256 长度非法（${#h}） —— 停止跟随，不前进" >&2; exit 1; }
 }
 
-# debug.2026.10.4.native-api.3 -> 2026.10.4_beta3（规则：<日期>_beta<序数>）
-# 形态不符时输出空串，由 main 的格式守卫 fail-loud。
+# <tag> <published_at 的 YYYY-MM-DD> -> <日期>_beta<N>（tag 尾 -beta.N）或 <日期>
+# 日期里的 `-` 换成 `.`（apk 版本号用点分日期）。形态不符时输出空串，由 main 的格式守卫 fail-loud。
 derive_version() {
-    local tag="$1" date n
-    date="$(printf '%s' "$tag" | sed -nE 's/^debug\.([0-9]+(\.[0-9]+){2})\..*$/\1/p')"
-    n="$(printf '%s' "$tag" | sed -nE 's/.*[._-]([0-9]+)$/\1/p')"
-    if [ -n "$date" ] && [ -n "$n" ]; then
-        printf '%s_beta%s\n' "$date" "$n"
+    local tag="$1" date="$2" n dd
+    dd="$(printf '%s' "$date" | sed -nE 's/^([0-9]{4})-([0-9]{2})-([0-9]{2})$/\1.\2.\3/p')"
+    n="$(printf '%s' "$tag" | sed -nE 's/.*-beta\.([0-9]+)$/\1/p')"
+    if [ -n "$dd" ]; then
+        if [ -n "$n" ]; then
+            printf '%s_beta%s\n' "$dd" "$n"
+        else
+            printf '%s\n' "$dd"
+        fi
     else
         printf '\n'
     fi
 }
 
 main() {
-    local tag version commit suffix hash_x86_64 hash_aarch64 asset tmpdir
-    local old_tag old_commit old_rel old_hx old_ha
-    local assets=()
+    local tag version commit variant published
+    local hash_x86_64 hash_aarch64 asset asset_x86 asset_arm tmpdir
+    local old_tag old_version old_commit old_rel old_hx old_ha
 
-    if [ -n "${FORK_RELEASE_TAG:-}" ]; then
-        tag="$FORK_RELEASE_TAG"
+    if [ -n "${HONK_RELEASE_TAG:-}" ]; then
+        tag="$HONK_RELEASE_TAG"
     else
-        tag="$(list_candidates | head -n 1)"
+        tag="$(pick_highest "$(list_candidates)")"
     fi
-    [ -n "$tag" ] || { echo "error: 找不到 fork 的 debug.* release tag" >&2; exit 1; }
+    [ -n "$tag" ] || { echo "error: 找不到上游的 v* release tag" >&2; exit 1; }
 
-    version="$(derive_version "$tag")"
-    # apk 版本号必须以数字开头；fork tag 形态变化时 derive_version 会产出空串 —— 宁可
+    published="$(fetch_published_date "$tag")" \
+        || { echo "error: 取不到 ${tag} 的 published_at —— 停止跟随，不前进" >&2; exit 1; }
+    [ -n "$published" ] || { echo "error: 取不到 ${tag} 的 published_at —— 停止跟随，不前进" >&2; exit 1; }
+
+    version="$(derive_version "$tag" "$published")"
+    # apk 版本号必须以数字开头；日期/tag 形态变化时 derive_version 会产出空串 —— 宁可
     # fail-loud，也绝不把非法版本写进 Makefile。
     case "$version" in
         [0-9]*) ;;
-        *) echo "error: ${tag} 派生出的版本号非法：'${version}'（期望格式 debug.<日期>.native-api.<序数> ⇒ <日期>_beta<序数>）" >&2; exit 1 ;;
+        *) echo "error: ${tag} 派生出的版本号非法：'${version}'（期望 published_at 的 UTC 日期 YYYY-MM-DD + tag 尾 -beta.N ⇒ YYYY.MM.DD_betaN）" >&2; exit 1 ;;
     esac
 
     commit="$(fetch_commit "$tag")" \
         || { echo "error: 取不到 ${tag} 对应的 commit —— 停止跟随，不前进" >&2; exit 1; }
     [ -n "$commit" ] || { echo "error: 取不到 ${tag} 对应的 commit —— 停止跟随，不前进" >&2; exit 1; }
 
-    # 资产名与 Makefile 的 HONK_ASSET 拼法一致（后缀由 Makefile 决定：置空 = 非 stock）
-    suffix="$(makefile_var HONK_SUFFIX)"
+    # 资产名与 Makefile 的 HONK_ASSET 拼法一致（变体后缀由 Makefile 决定）
+    variant="$(makefile_var HONK_VARIANT)"
+    [ -n "$variant" ] || { echo "error: honk/Makefile 未定义 HONK_VARIANT —— 停止跟随，不前进" >&2; exit 1; }
+    asset_x86="honk-core-${tag}-x86_64-unknown-linux-musl${variant}.tar.gz"
+    asset_arm="honk-core-${tag}-aarch64-unknown-linux-musl${variant}.tar.gz"
 
     # 临时目录：基址经 pick_dl_base 过滤为 POSIX 形态（Windows 形态的 TMPDIR 会让
     # mktemp 返回 `C:\...`，既让 sha256sum 加转义前缀、也让清理失败并顶掉退出码）。
@@ -210,13 +286,23 @@ main() {
     mkdir -p "$tmpdir"
     DL_TMP="$tmpdir"
 
-    # 该 release 不公布 SHA256SUMS ⇒ 下载两个 musl 非 stock 资产自算哈希。
-    # 下载失败即资产不可达 ⇒ fail-safe 停止、不写盘（宁可不更新，也不写一个取不到的 pin）。
-    for asset in \
-        "honk-core-debug-x86_64-unknown-linux-musl${suffix}.tar.gz" \
-        "honk-core-debug-aarch64-unknown-linux-musl${suffix}.tar.gz"; do
+    # 1) 哈希的权威来源 = 上游 SHA256SUMS。取不到即 fail-safe 停止、不写盘。
+    if ! fetch_sums "$tag" "$tmpdir/SHA256SUMS"; then
+        echo "error: 上游 ${HONK_REPO} 的 ${tag} 取不到 SHA256SUMS —— 停止跟随，不前进" >&2
+        exit 1
+    fi
+    hash_x86_64="$(sum_for "$tmpdir/SHA256SUMS" "$asset_x86")"
+    hash_aarch64="$(sum_for "$tmpdir/SHA256SUMS" "$asset_arm")"
+    [ -n "$hash_x86_64" ] || { echo "error: SHA256SUMS 里没有 ${asset_x86} —— 停止跟随，不前进" >&2; exit 1; }
+    [ -n "$hash_aarch64" ] || { echo "error: SHA256SUMS 里没有 ${asset_arm} —— 停止跟随，不前进" >&2; exit 1; }
+    assert_hash "$hash_x86_64" HONK_HASH_X86_64
+    assert_hash "$hash_aarch64" HONK_HASH_AARCH64
+
+    # 2) 下载两个资产做 sha256 交叉校验（同时保留 Content-Length 完整性闸门）。
+    #    下载失败即资产不可达 ⇒ fail-safe 停止、不写盘。
+    for asset in "$asset_x86" "$asset_arm"; do
         if ! fetch_asset "$tag" "$asset" "$tmpdir/$asset"; then
-            echo "error: fork ${FORK_REPO} 的 ${tag} 取不到资产 ${asset}（或下载不完整） —— 停止跟随，不前进" >&2
+            echo "error: 上游 ${HONK_REPO} 的 ${tag} 取不到资产 ${asset}（或下载不完整） —— 停止跟随，不前进" >&2
             exit 1
         fi
         # 计算 sha256 **之前**的大小闸门（两种模式共用）：0 字节算出的 sha256 形态合法，
@@ -225,40 +311,53 @@ main() {
             echo "error: ${asset} 字节数为 0 —— 停止跟随，不前进" >&2
             exit 1
         fi
-        assets+=("$asset")
     done
-    hash_x86_64="$(sha256_of "$tmpdir/${assets[0]}")"
-    hash_aarch64="$(sha256_of "$tmpdir/${assets[1]}")"
-    assert_hash "$hash_x86_64" HONK_HASH_X86_64
-    assert_hash "$hash_aarch64" HONK_HASH_AARCH64
+    local computed_x86 computed_arm
+    computed_x86="$(sha256_of "$tmpdir/$asset_x86")"
+    computed_arm="$(sha256_of "$tmpdir/$asset_arm")"
+    assert_hash "$computed_x86" "${asset_x86} 实算"
+    assert_hash "$computed_arm" "${asset_arm} 实算"
+    if [ "$computed_x86" != "$hash_x86_64" ]; then
+        echo "error: ${asset_x86} 与 SHA256SUMS 不符（SHA256SUMS=${hash_x86_64}，实算=${computed_x86}） —— 停止跟随，不前进" >&2
+        exit 1
+    fi
+    if [ "$computed_arm" != "$hash_aarch64" ]; then
+        echo "error: ${asset_arm} 与 SHA256SUMS 不符（SHA256SUMS=${hash_aarch64}，实算=${computed_arm}） —— 停止跟随，不前进" >&2
+        exit 1
+    fi
 
-    old_tag="$(makefile_var FORK_RELEASE_TAG)"
+    old_tag="$(makefile_var HONK_RELEASE_TAG)"
+    old_version="$(makefile_var PKG_VERSION)"
     old_commit="$(makefile_var HONK_COMMIT)"
     old_rel="$(makefile_var PKG_RELEASE)"
     old_hx="$(makefile_var HONK_HASH_X86_64)"
     old_ha="$(makefile_var HONK_HASH_AARCH64)"
     [ -n "$old_rel" ] || old_rel=1
 
-    # 判变键 = commit + 两个 musl 哈希：
-    #   · 三者都相同 ⇒ 一个字节都不改（git diff 为空、不触发重建）。
-    #   · commit 未变但哈希变了（同一 tag 被就地替换资产）⇒ **必须**重新钉哈希：
-    #     否则 URL 指向同一 tag 却校验新字节，CI 会一直失败、且因 commit 没变而永不自愈。
-    if [ "$commit" = "$old_commit" ] \
+    # 判变 = tag + 派生版本 + commit + 两个哈希：
+    #   · 全同 ⇒ 一个字节都不改（git diff 为空、不触发重建）。
+    #   · tag 未变但 commit/哈希变了（同一 release 被就地替换资产）⇒ **必须**重新钉值：
+    #     否则 URL 指向同一 tag 却校验新字节，CI 会一直失败、且因 tag 没变而永不自愈。
+    if [ "$tag" = "$old_tag" ] && [ "$version" = "$old_version" ] \
+        && [ "$commit" = "$old_commit" ] \
         && [ "$hash_x86_64" = "$old_hx" ] && [ "$hash_aarch64" = "$old_ha" ]; then
-        echo "honk core is up to date (fork=${tag}, commit=${commit}, PKG_VERSION=${version})"
+        echo "honk core is up to date (upstream=${tag}, commit=${commit}, PKG_VERSION=${version})"
         echo "HONK_HASH_X86_64=${hash_x86_64}"
         echo "HONK_HASH_AARCH64=${hash_aarch64}"
         return 0
     fi
 
-    # 走到这里且 commit 未变 = 同一 release 被重新打包，记一条便于事后诊断
-    if [ "$commit" = "$old_commit" ]; then
-        echo "note: commit 未变但资产哈希已变（同一 release 被就地重新打包），重新钉哈希" >&2
+    # 走到这里且 tag 未变 = 同一 release 被重新打包，记一条便于事后诊断
+    if [ "$tag" = "$old_tag" ]; then
+        echo "note: tag 未变但 commit/资产哈希已变（同一 release 被就地重新打包），重新钉值" >&2
     fi
 
-    # 换了 tag：正常发布 ⇒ PKG_RELEASE 归 1；同一 tag 被重新打包 ⇒ 递增
+    # PKG_RELEASE：
+    #   · tag 未变 ⇒ 递增（同一 release 重新打包）
+    #   · tag 变了但派生版本与旧值相同（同一天连发两版）⇒ 递增，避免同版本号互相覆盖
+    #   · 其余（新 tag 且版本变了）⇒ 归 1
     local next_rel
-    if [ "$tag" = "$old_tag" ]; then
+    if [ "$tag" = "$old_tag" ] || [ "$version" = "$old_version" ]; then
         next_rel=$((old_rel + 1))
     else
         next_rel=1
@@ -276,7 +375,7 @@ main() {
              -v hx="$hash_x86_64" -v ha="$hash_aarch64" -v rel="$next_rel" '
         BEGIN { sv=st=sc=sx=sa=sr=0 }
         /^PKG_VERSION:=/       { print "PKG_VERSION:=" ver;       sv=1; next }
-        /^FORK_RELEASE_TAG:=/  { print "FORK_RELEASE_TAG:=" tag;  st=1; next }
+        /^HONK_RELEASE_TAG:=/  { print "HONK_RELEASE_TAG:=" tag;  st=1; next }
         /^HONK_COMMIT:=/       { print "HONK_COMMIT:=" cmt;       sc=1; next }
         /^HONK_HASH_X86_64:=/  { print "HONK_HASH_X86_64:=" hx;   sx=1; next }
         /^HONK_HASH_AARCH64:=/ { print "HONK_HASH_AARCH64:=" ha;  sa=1; next }
@@ -284,7 +383,7 @@ main() {
         { print }
         END {
             if (!(sv && st && sc && sx && sa && sr)) {
-                printf "error: Makefile 缺待更新字段（PKG_VERSION=%d FORK_RELEASE_TAG=%d HONK_COMMIT=%d HONK_HASH_X86_64=%d HONK_HASH_AARCH64=%d PKG_RELEASE=%d） —— 原文件未改，不前进\n", sv, st, sc, sx, sa, sr > "/dev/stderr"
+                printf "error: Makefile 缺待更新字段（PKG_VERSION=%d HONK_RELEASE_TAG=%d HONK_COMMIT=%d HONK_HASH_X86_64=%d HONK_HASH_AARCH64=%d PKG_RELEASE=%d） —— 原文件未改，不前进\n", sv, st, sc, sx, sa, sr > "/dev/stderr"
                 exit 1
             }
         }
@@ -302,8 +401,8 @@ main() {
     fi
     MK_TMP=""
 
-    echo "honk updated to fork=${tag} commit=${commit} (PKG_VERSION=${version}, PKG_RELEASE=${next_rel})"
-    echo "FORK_RELEASE_TAG=${tag}"
+    echo "honk updated to upstream=${tag} commit=${commit} (PKG_VERSION=${version}, PKG_RELEASE=${next_rel})"
+    echo "HONK_RELEASE_TAG=${tag}"
     echo "HONK_COMMIT=${commit}"
     echo "HONK_HASH_X86_64=${hash_x86_64}"
     echo "HONK_HASH_AARCH64=${hash_aarch64}"

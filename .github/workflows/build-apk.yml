@@ -79,11 +79,11 @@ jobs:
           echo "packages=${packages}"              >> "$GITHUB_OUTPUT"
           luci_version="$(grep '^PKG_VERSION:=' luci-app-honk/Makefile | head -n 1 | cut -d= -f2)-r$(grep '^PKG_RELEASE:=' luci-app-honk/Makefile | head -n 1 | cut -d= -f2)"
           echo "luci_version=${luci_version}"      >> "$GITHUB_OUTPUT"
-          # 上游来源 tag：PKG_VERSION 由它派生且会丢掉 series（如 native-api），
+          # 上游发布 tag：PKG_VERSION 由 release 日期派生、不含 tag 本身，
           # 故 notes 单独标注，让内核出处可溯源
-          source_tag=$(grep '^FORK_RELEASE_TAG:=' honk/Makefile | head -n 1 | cut -d= -f2)
+          source_tag=$(grep '^HONK_RELEASE_TAG:=' honk/Makefile | head -n 1 | cut -d= -f2)
           if [ -z "$source_tag" ]; then
-            echo "::error::honk/Makefile 未定义 FORK_RELEASE_TAG，notes 无法标注上游来源"
+            echo "::error::honk/Makefile 未定义 HONK_RELEASE_TAG，notes 无法标注上游来源"
             exit 1
           fi
           echo "source_tag=${source_tag}"          >> "$GITHUB_OUTPUT"

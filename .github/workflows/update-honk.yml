@@ -21,6 +21,9 @@ jobs:
           persist-credentials: true
 
       - name: Update honk version
+        env:
+          # 脚本要调 GitHub API 取 release 的 published_at；匿名会撞限流（403）。
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/update_honk_version.sh
 
       - name: Commit changes
@@ -34,7 +37,7 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No version change."
           else
-            TAG="$(grep '^FORK_RELEASE_TAG:=' honk/Makefile | cut -d= -f2)"
+            TAG="$(grep '^HONK_RELEASE_TAG:=' honk/Makefile | cut -d= -f2)"
             VER="$(grep '^PKG_VERSION:=' honk/Makefile | cut -d= -f2)"
             SHA="$(grep '^HONK_COMMIT:=' honk/Makefile | cut -d= -f2 | cut -c1-12)"
             git add honk/Makefile
