@@ -3,7 +3,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=honk
-PKG_VERSION:=2026.10.23_beta1
+PKG_VERSION:=2026.10.25_beta2
 PKG_RELEASE:=1
 
 # 核心来源：上游 daeuniverse/honk 的 `v*` release 资产（预编译，免自建）。
@@ -16,14 +16,14 @@ PKG_RELEASE:=1
 #
 #   HONK_RELEASE_TAG  上游 release tag（拼资产 URL、并据此派生 PKG_VERSION）
 #   HONK_COMMIT       该 tag 对应的 commit（更新脚本判变与溯源）
-HONK_RELEASE_TAG:=v0.1.0-beta.1
-HONK_COMMIT:=2e73b9f493f2ba01c2f5b0c547dc7a7df7a4b239
+HONK_RELEASE_TAG:=v0.1.0-beta.2
+HONK_COMMIT:=399f6985e7a6cfb78a33a0c71b3248f7eafef22e
 
 # 两个 musl（native-api = mimalloc）资产的 sha256，取自上游 release 的 SHA256SUMS；
 # scripts/update_honk_version.sh 会再下载两个资产做一次交叉校验（PKG_HASH 让 CI 在
 # 字节不符时 fail-loud）。
-HONK_HASH_X86_64:=9942bd9856ab32b8a076f6c49556d64f7d66e6452f1638550672116c54d1e266
-HONK_HASH_AARCH64:=94bccb0a974fd8c3af761cc66aa0646677f0d9f183e8a8ce923041398da4d68f
+HONK_HASH_X86_64:=b08a734f79ddabadbf0e5c9554379c9af65968b344de1efe57b20d18aa5899e3
+HONK_HASH_AARCH64:=49f5d74059de8502428cb867fc721cd4dacbe4ea4d079d4265158ca252f2fa9d
 
 PKG_LICENSE:=GPL-3.0-only
 PKG_LICENSE_FILES:=LICENSE
