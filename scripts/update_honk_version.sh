@@ -131,30 +131,53 @@ fetch_commit() {
     printf '%s\n' "$c"
 }
 
-# 该 tag 的发布日（UTC 的 YYYY-MM-DD）：版本号由它派生，取不到即 fail-loud。
+# 该 tag 的发布日（UTC 的 YYYY-MM-DD）。
+# 失败时把 HTTP 状态码留在 PUBLISHED_HTTP_STATUS：404 = 上游 tag 已推、release 仍是草稿
+# （发版窗口期）；403/000 = 限流或网络故障。两者处置不同，日志必须能区分。
 # GitHub API 匿名会撞限流 ⇒ 有 GH_TOKEN / GITHUB_TOKEN 时带 Authorization 头。
+PUBLISHED_HTTP_STATUS=""
 fetch_published_date() {
-    local tag="$1" api token json d
+    local tag="$1" api token body code d
+    local -a auth=()
+    PUBLISHED_HTTP_STATUS=""
     if [ -n "${HONK_FIXTURE_DIR:-}" ]; then
-        [ -r "${HONK_FIXTURE_DIR}/${tag}/PUBLISHED_AT" ] || return 1
+        if [ ! -r "${HONK_FIXTURE_DIR}/${tag}/PUBLISHED_AT" ]; then
+            PUBLISHED_HTTP_STATUS="fixture:missing"
+            return 1
+        fi
         tr -d ' \t\r\n' < "${HONK_FIXTURE_DIR}/${tag}/PUBLISHED_AT"
         printf '\n'
         return 0
     fi
     api="https://api.github.com/repos/${HONK_REPO}/releases/tags/${tag}"
     token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
-    if [ -n "$token" ]; then
-        json="$(curl -fsSL --retry 3 --connect-timeout 20 --max-time 120 \
-            -H "Authorization: Bearer ${token}" "$api" 2>/dev/null || true)"
-    else
-        json="$(curl -fsSL --retry 3 --connect-timeout 20 --max-time 120 \
-            "$api" 2>/dev/null || true)"
-    fi
-    d="$(printf '%s' "$json" \
-        | grep -oE '"published_at"[[:space:]]*:[[:space:]]*"[0-9]{4}-[0-9]{2}-[0-9]{2}' \
+    [ -n "$token" ] && auth=(-H "Authorization: Bearer ${token}")
+    body="$(mktemp 2>/dev/null || echo "/tmp/honk-pub.$$")"
+    code="$(curl -sS -L --retry 3 --connect-timeout 20 --max-time 120 \
+        ${auth[@]+"${auth[@]}"} -o "$body" -w '%{http_code}' "$api" 2>/dev/null || true)"
+    PUBLISHED_HTTP_STATUS="${code:-000}"
+    d="$(grep -oE '"published_at"[[:space:]]*:[[:space:]]*"[0-9]{4}-[0-9]{2}-[0-9]{2}' "$body" 2>/dev/null \
         | head -n 1 | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}')"
+    rm -f -- "$body"
     [ -n "$d" ] || return 1
     printf '%s\n' "$d"
+}
+
+# 过滤出「release 已公开」的候选 tag（保持传入顺序）。
+# 上游发版流程是先推 tag、再公开 release（草稿期间 assets 还在上传）：这段时间 tag 已经
+# 出现在 `git ls-remote` 里，但 /releases/tags 对我们返回 404。这类 tag 跳过即可，
+# 否则每日任务会在每次发版窗口期红一次。
+# 一个都不剩时输出空串，由调用方区分「发版窗口期」与「真故障」。
+published_candidates() {
+    local t
+    for t in $1; do
+        if fetch_published_date "$t" >/dev/null; then
+            printf '%s\n' "$t"
+        else
+            echo "note: ${t} 的 release 尚不可见（HTTP ${PUBLISHED_HTTP_STATUS:-?}），跳过" >&2
+        fi
+    done
+    return 0
 }
 
 # 取资产字节。夹具模式下从本地复制（同样用于自算哈希），生产路径下载。
@@ -246,13 +269,31 @@ derive_version() {
 
 main() {
     local tag version commit variant published
-    local hash_x86_64 hash_aarch64 asset asset_x86 asset_arm tmpdir
+    local hash_x86_64 hash_aarch64 asset asset_x86 asset_arm tmpdir candidates cur_tag
     local old_tag old_version old_commit old_rel old_hx old_ha
 
     if [ -n "${HONK_RELEASE_TAG:-}" ]; then
         tag="$HONK_RELEASE_TAG"
     else
-        tag="$(pick_highest "$(list_candidates)")"
+        candidates="$(list_candidates)"
+        # pick_highest 无输入时返回 1；`set -e` 下必须接住，否则下面的「窗口期 / 故障」
+        # 分支根本到不了，报错也打不出来。
+        tag="$(pick_highest "$(published_candidates "$candidates")")" || tag=""
+        if [ -z "$tag" ]; then
+            # 一个都取不到：若连当前钉的 tag 也查不到 release，说明是 API/网络故障而非
+            # 发版窗口期 —— 仍然 fail-loud，避免把故障当成「已是最新」静默吞掉。
+            cur_tag="$(makefile_var HONK_RELEASE_TAG)"
+            if [ -n "$cur_tag" ] && printf '%s\n' "$candidates" | grep -qxF "$cur_tag"; then
+                # published_candidates 在命令替换的子 shell 里跑，状态码传不出来，这里补查一次，
+                # 让日志能区分 404（草稿）与 403/000（限流或断网）。
+                fetch_published_date "$cur_tag" >/dev/null || true
+                echo "error: 连当前钉版 ${cur_tag} 的 release 也取不到（HTTP ${PUBLISHED_HTTP_STATUS:-?}） —— 停止跟随，不前进" >&2
+                exit 1
+            fi
+            echo "note: 候选 release 均尚未公开（发版窗口期），本轮不前进" >&2
+            echo "honk core is up to date (无已公开的新候选，保持 ${cur_tag:-未钉版})"
+            return 0
+        fi
     fi
     [ -n "$tag" ] || { echo "error: 找不到上游的 v* release tag" >&2; exit 1; }
 
