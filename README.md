@@ -6,7 +6,7 @@ OpenWrt / ImmortalWrt（25.x，**apk** 体系）上 [honk](https://github.com/da
 
 | 包名 | 类型 | 说明 |
 | :--- | :--- | :--- |
-| **`honk`** | 核心服务 | 取 [daeuniverse/honk](https://github.com/daeuniverse/honk)（上游）`v*` release 中**版本最高**的 `native-api` 变体（非 stock，即 mimalloc）musl 静态 `honk-core`，并安装 init 脚本与 `/etc/honk/` 配置 |
+| **`honk`** | 核心服务 | 取 [daeuniverse/honk](https://github.com/daeuniverse/honk)（上游）`v*` release 中**版本最高**的 `native-api` 变体（非 stock，即 jemalloc）musl 静态 `honk-core`，并安装 init 脚本与 `/etc/honk/` 配置 |
 | **`luci-app-honk`** | 管理界面 | LuCI Web 界面与 rpcd 服务，菜单项为 **服务 → HONK** |
 | **`luci-i18n-honk-*`** | 语言包 | 由 `luci.mk` 跟随界面版本自动带出的翻译 |
 
@@ -55,9 +55,9 @@ uci set honk.config.enabled=1 && uci commit honk
 > [!IMPORTANT]
 > 随包 `/etc/honk/config.d/api.dae` 的 `native_api` 段默认整段注释（`enabled: false` ⇒ 不启动监听），默认配置可直接启动；要启用面板就取消注释并填好 `secret`（`listen` / `ui` 按需改）。本包自带的 `api.dae` 只是配置参考，不换核心即可启用。
 >
-> 核心取自 [`daeuniverse/honk`](https://github.com/daeuniverse/honk)（上游）的 release 资产 —— `honk-core-<tag>-<架构>-unknown-linux-musl-native-api.tar.gz`（`native-api` 变体，非 stock，即 mimalloc）。锚点是上游 `v*` release 里**版本最高**的那个，开发用的 `debug.*` 不参与。上游同时公布 `SHA256SUMS`：`scripts/update_honk_version.sh` 按它取两个资产的 sha256，再下载资产做交叉校验后写入 `honk/Makefile`（`PKG_HASH` 让 CI 在字节不符时 fail-loud）。解出的 `honk-core` 放到 `/usr/bin/honk-core`。包版本由 release 发布日派生（`2026-10-23` + `beta.1` → `2026.10.23_beta1`）。
+> 核心取自 [`daeuniverse/honk`](https://github.com/daeuniverse/honk)（上游）的 release 资产 —— `honk-core-<tag>-<架构>-unknown-linux-musl-native-api.tar.gz`（`native-api` 变体，非 stock，即 jemalloc）。锚点是上游 `v*` release 里**版本最高**的那个，开发用的 `debug.*` 不参与。上游同时公布 `SHA256SUMS`：`scripts/update_honk_version.sh` 按它取两个资产的 sha256，再下载资产做交叉校验后写入 `honk/Makefile`（`PKG_HASH` 让 CI 在字节不符时 fail-loud）。解出的 `honk-core` 放到 `/usr/bin/honk-core`。包版本由 release 发布日派生（`2026-10-23` + `beta.1` → `2026.10.23_beta1`）。
 >
-> 该变体的 cargo feature 为 `ebpf,rprx,native-api,mimalloc`：含 `native_api`，**不含 `native-ui` 与 `clash-api`**。面板采用目录形式 —— `api.dae` 的 `ui` 指向面板目录的绝对路径，由本仓「面板」页在线更新；目标目录需存在且含可读 `index.html`。`ui: 'embedded'` 会让核心启动失败（`embedded native UI requires the native-ui feature`）。
+> 该变体的 cargo feature 为 `ebpf,rprx,native-api,jemalloc`：含 `native_api`，**不含 `native-ui` 与 `clash-api`**。面板采用目录形式 —— `api.dae` 的 `ui` 指向面板目录的绝对路径，由本仓「面板」页在线更新；目标目录需存在且含可读 `index.html`。`ui: 'embedded'` 会让核心启动失败（`embedded native UI requires the native-ui feature`）。
 >
 > ⚠️ 升级提示：设备上若现存 `ui: 'embedded'`，换到本包后核心会启动失败；`api.dae` 的 `ui` 需要改为面板目录的绝对路径，并重启服务（`/etc/honk/` 为 conffile，升级不会自动改写该值）。
 >

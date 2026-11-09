@@ -7,8 +7,8 @@ PKG_VERSION:=2026.11.08_beta6
 PKG_RELEASE:=1
 
 # 核心来源：上游 daeuniverse/honk 的 `v*` release 资产（预编译，免自建）。
-# 随包变体 = native-api（非 stock，即 mimalloc），cargo feature 为
-# ebpf,rprx,native-api,mimalloc —— **不含 native-ui，也不含 clash-api**。
+# 随包变体 = native-api（非 stock，即 jemalloc），cargo feature 为
+# ebpf,rprx,native-api,jemalloc —— **不含 native-ui，也不含 clash-api**。
 # 因此面板走目录形式：在 api.dae 里写 `ui: 'embedded'` 会让核心启动失败
 # （embedded native UI requires the native-ui feature）。
 #
@@ -19,7 +19,7 @@ PKG_RELEASE:=1
 HONK_RELEASE_TAG:=v0.1.0-beta.6
 HONK_COMMIT:=64848881b7304e250e7a25422f4f1d86a5975eca
 
-# 两个 musl（native-api = mimalloc）资产的 sha256，取自上游 release 的 SHA256SUMS；
+# 两个 musl（native-api = jemalloc）资产的 sha256，取自上游 release 的 SHA256SUMS；
 # scripts/update_honk_version.sh 会再下载两个资产做一次交叉校验（PKG_HASH 让 CI 在
 # 字节不符时 fail-loud）。
 HONK_HASH_X86_64:=fee105e1b55dc9a2e6d7040a629d94af7bf9fb342ebd9867f4db7b23f2481aad
@@ -37,7 +37,7 @@ else ifeq ($(ARCH),aarch64)
   HONK_HASH:=$(HONK_HASH_AARCH64)
 endif
 
-# 变体后缀：-native-api = 非 stock（mimalloc）；上游另有 -stock / -clash-api / -full
+# 变体后缀：-native-api = 非 stock（jemalloc）；上游另有 -stock / -clash-api / -full
 HONK_VARIANT:=-native-api
 HONK_ASSET:=honk-core-$(HONK_RELEASE_TAG)-$(HONK_TARGET)$(HONK_VARIANT).tar.gz
 
