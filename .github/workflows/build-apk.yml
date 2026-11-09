@@ -124,6 +124,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: prepare
     if: needs.prepare.outputs.should_build == 'true'
+    # snapshot SDK 容器不含 SDK，启动时现下（setup.sh），镜像侧被限速时单次可拖到 3 小时
+    # （2026-11-08 run 42522700882：下载 11192s，编译仅 11min）。卡住就失败重跑，换镜像。
+    timeout-minutes: 60
     # contents: read 用于 checkout；actions: write 用于 upload-artifact
     # （限制 permissions 后 artifact 上传需要该 scope，否则 403）
     permissions:
