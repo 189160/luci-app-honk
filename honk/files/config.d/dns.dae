@@ -4,12 +4,12 @@ dns {
     # 只绑 loopback：LAN 侧交给 dnsmasq 收口，再把未知域名转发到这里。
     bind: '127.0.0.1:5335'
     upstream {
-        cn_53: 'udp://dns.alidns.com:53' -> direct
-        ww_53: 'tcp+udp://dns.google:53' -> proxy
-        cn_h2: 'https://dns.alidns.com:443/dns-query' -> direct
-        ww_h2: 'https://dns.google:443/dns-query' -> proxy
-        cn_h3: 'h3://dns.alidns.com:443/dns-query' -> direct
-        ww_h3: 'h3://dns.google:443/dns-query' -> proxy
+        cn_53: 'udp://dns.alidns.com' -> direct
+        ww_53: 'tcp+udp://dns.google' -> proxy
+        cn_h2: 'https://dns.alidns.com' -> direct
+        ww_h2: 'https://dns.google' -> proxy
+        cn_h3: 'h3://dns.alidns.com' -> direct
+        ww_h3: 'h3://dns.google' -> proxy
     }
     routing {
         request {
