@@ -134,9 +134,15 @@ get_latest_tag() {
 
 list_assets() {
     tag="$1"
-    curl -fsSL --max-time 30 "$(gurl "https://github.com/$REPO/releases/expanded_assets/$tag")" 2>/dev/null \
-        | grep -oE "href=\"/$REPO/releases/download/$tag/[^\"]+\.apk\"" \
-        | sed "s#^href=\"/#https://github.com/#; s#\"\$##" | sort -u
+    # 直连优先、加速站兜底：加速站对 expanded_assets 这类 HTML 页可能返回空或整站不可达，
+    # 而直连在多数网络可用。与 get_latest_tag 保持同一双通道策略，任一通道拿到即返回。
+    for u in $(rel_urls "/releases/expanded_assets/$tag"); do
+        out=$(curl -fsSL --max-time 30 "$u" 2>/dev/null \
+            | grep -oE "href=\"/$REPO/releases/download/$tag/[^\"]+\.apk\"" \
+            | sed "s#^href=\"/#https://github.com/#; s#\"\$##" | sort -u)
+        [ -n "$out" ] && { printf '%s\n' "$out"; return 0; }
+    done
+    return 1
 }
 
 TAG=$(get_latest_tag) || die "获取 Release 失败，请检查网络或仓库名是否正确"
@@ -145,10 +151,14 @@ echo "最新版本: $TAG"
 # 拉取 Release 的 SHA256SUMS 用于下载后的完整性校验（旧 Release 可能未附此文件，容错处理）
 SUMS=""
 SUMS_FILE="/tmp/honk-SHA256SUMS.$$"
-if curl -fsSL --max-time 30 -o "$SUMS_FILE" "$(gurl "https://github.com/$REPO/releases/download/$TAG/SHA256SUMS")" 2>/dev/null && [ -s "$SUMS_FILE" ]; then
-    SUMS="$SUMS_FILE"
-    echo "校验文件: 已取得 SHA256SUMS"
-else
+for u in $(rel_urls "/releases/download/$TAG/SHA256SUMS"); do
+    if curl -fsSL --max-time 30 -o "$SUMS_FILE" "$u" 2>/dev/null && [ -s "$SUMS_FILE" ]; then
+        SUMS="$SUMS_FILE"
+        echo "校验文件: 已取得 SHA256SUMS"
+        break
+    fi
+done
+if [ -z "$SUMS" ]; then
     rm -f "$SUMS_FILE"
     SUMS=""
     echo "⚠ 未取得 SHA256SUMS：本次跳过完整性校验（该 Release 可能未附校验文件）"
@@ -307,7 +317,13 @@ install_url() {
     [ -n "$url" ] || return 1
     file=$(basename "$url")
     info "下载 $file"
-    curl -fsSL --max-time 300 --retry 2 -o "/tmp/$file" "$(gurl "$url")" || { echo "✗ 下载失败"; return 1; }
+    # 直连优先、加速站兜底：与取列表/取校验文件同一策略，避免某站点网络下加速站不可达导致下载失败。
+    ok=0
+    for u in "$url" "$(gurl "$url")"; do
+        [ -n "$u" ] || continue
+        if curl -fsSL --max-time 300 --retry 2 -o "/tmp/$file" "$u"; then ok=1; break; fi
+    done
+    [ "$ok" = 1 ] || { echo "✗ 下载失败"; return 1; }
 
     verify_sha256 "/tmp/$file" || { rm -f "/tmp/$file"; return 1; }
 
